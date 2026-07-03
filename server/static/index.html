@@ -5,31 +5,34 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WhisperFlow Teams</title>
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23191714'/><text x='16' y='23' font-family='Georgia' font-size='20' fill='%23f7f4ee' text-anchor='middle'>W</text></svg>">
 </head>
 <body>
 
 <div id="auth-screen" class="auth-screen hidden">
   <div class="auth-card">
-    <div class="auth-logo">🎙️</div>
-    <h1>WhisperFlow <span class="accent">Teams</span></h1>
-    <p class="auth-sub">Gestión de equipo y transcripción de voz, 100% en tu servidor.</p>
+    <div class="auth-mast">
+      <div class="auth-brand">WhisperFlow <em>Teams</em></div>
+      <div class="rule-double"></div>
+      <div class="auth-tagline">GESTIÓN DE EQUIPO · TRANSCRIPCIÓN DE VOZ · EN VUESTRO SERVIDOR</div>
+    </div>
     <div class="auth-tabs">
       <button id="tab-login" class="tab active">Iniciar sesión</button>
+      <span class="tab-sep">/</span>
       <button id="tab-register" class="tab">Crear cuenta</button>
     </div>
     <form id="auth-form">
       <div id="field-display" class="field hidden">
-        <label>Nombre para mostrar</label>
+        <label>NOMBRE PARA MOSTRAR</label>
         <input id="in-display" type="text" placeholder="Lautaro" autocomplete="name">
       </div>
       <div class="field">
-        <label>Usuario</label>
+        <label>USUARIO</label>
         <input id="in-username" type="text" placeholder="lau" required autocomplete="username">
       </div>
       <div class="field">
-        <label>Contraseña</label>
-        <input id="in-password" type="password" placeholder="••••••••" required autocomplete="current-password">
+        <label>CONTRASEÑA</label>
+        <input id="in-password" type="password" placeholder="········" required autocomplete="current-password">
       </div>
       <p id="auth-error" class="auth-error"></p>
       <button type="submit" class="btn btn-primary btn-block" id="auth-submit">Entrar</button>
@@ -38,36 +41,27 @@
 </div>
 
 <div id="app" class="app hidden">
-  <aside class="sidebar">
-    <div class="brand">🎙️ <span>WhisperFlow</span></div>
-    <nav>
-      <button class="nav-item active" data-view="dashboard">
-        <svg viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
-        Panel
-      </button>
-      <button class="nav-item" data-view="board">
-        <svg viewBox="0 0 24 24"><path d="M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z"/></svg>
-        Tablero
-      </button>
-      <button class="nav-item" data-view="transcripts">
-        <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
-        Transcripciones
-      </button>
+  <header class="masthead">
+    <div class="brand">WhisperFlow <em>Teams</em></div>
+    <nav class="mast-nav">
+      <button class="nav-item active" data-view="dashboard">Panel</button>
+      <button class="nav-item" data-view="board">Tablero</button>
+      <button class="nav-item" data-view="transcripts">Transcripciones</button>
     </nav>
-    <div class="sidebar-foot">
-      <div class="user-chip">
-        <span id="me-avatar" class="avatar"></span>
-        <span id="me-name" class="user-name"></span>
-      </div>
-      <button id="btn-logout" class="btn btn-ghost btn-small">Salir</button>
+    <div class="mast-user">
+      <span id="me-avatar" class="avatar"></span>
+      <span id="me-name" class="user-name"></span>
+      <button id="btn-logout" class="btn btn-small">Salir</button>
     </div>
-  </aside>
+  </header>
+  <div class="rule-double rule-page"></div>
   <main id="main" class="main"></main>
 </div>
 
 <div id="modal-root"></div>
 <div id="toast-root" class="toast-root"></div>
 
+<script src="config.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

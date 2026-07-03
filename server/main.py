@@ -6,6 +6,7 @@ Run with: uvicorn server.main:app --host 0.0.0.0 --port 8000
 
 import asyncio
 import json
+import os
 import tempfile
 import threading
 from pathlib import Path
@@ -19,6 +20,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -29,6 +31,17 @@ from . import auth, db
 
 app = FastAPI(title="WhisperFlow Teams")
 db.init()
+
+# Frontend served from another origin (e.g. Vercel)? List it here:
+#   WF_CORS_ORIGINS=https://tuapp.vercel.app,https://otradominio.com
+_cors = [o.strip() for o in os.environ.get("WF_CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 STATUSES = {"todo", "doing", "done"}
 PRIORITIES = {"low", "medium", "high"}
@@ -45,7 +58,13 @@ def get_transcriber():
         if _transcriber is None:
             from whisperflow.transcribe import Transcriber
 
-            _transcriber = Transcriber(wf_config.load())
+            cfg = wf_config.load()
+            # Hosted deployments tune the model by env var instead of config.json
+            # (e.g. WF_MODEL=base on instances with little RAM).
+            cfg.model = os.environ.get("WF_MODEL", cfg.model)
+            cfg.device = os.environ.get("WF_DEVICE", cfg.device)
+            cfg.compute_type = os.environ.get("WF_COMPUTE_TYPE", cfg.compute_type)
+            _transcriber = Transcriber(cfg)
         return _transcriber
 
 
@@ -114,6 +133,7 @@ def register(body: Credentials):
     user_id = db.execute(
         "INSERT INTO users(username, display_name, salt, password_hash) VALUES(?,?,?,?)",
         (username, (body.display_name or body.username).strip(), salt, digest),
+        returning_id=True,
     )
     token = auth.create_session(user_id)
     user = db.query_one("SELECT id, username, display_name FROM users WHERE id=?", (user_id,))
@@ -196,6 +216,7 @@ def create_task(body: TaskIn, user: dict = Depends(current_user)):
            creator_id, due_date) VALUES(?,?,?,?,?,?,?)""",
         (body.title.strip(), body.description, body.status, body.priority,
          body.assignee_id, user["id"], body.due_date),
+        returning_id=True,
     )
     log_activity(user, f"{user['display_name']} creó la tarea «{body.title.strip()}»")
     hub.broadcast("tasks", user["display_name"])
@@ -215,7 +236,7 @@ def update_task(task_id: int, body: TaskPatch, user: dict = Depends(current_user
     if changes:
         sets = ", ".join(f"{k} = ?" for k in changes)
         db.execute(
-            f"UPDATE tasks SET {sets}, updated_at = datetime('now') WHERE id = ?",
+            f"UPDATE tasks SET {sets}, updated_at = {db.NOW} WHERE id = ?",
             (*changes.values(), task_id),
         )
         if changes.get("status") == "done" and task["status"] != "done":
@@ -258,6 +279,7 @@ def transcribe(audio: UploadFile, user: dict = Depends(current_user)):
     tid = db.execute(
         "INSERT INTO transcripts(user_id, text, language, duration) VALUES(?,?,?,?)",
         (user["id"], text, language, duration),
+        returning_id=True,
     )
     log_activity(user, f"{user['display_name']} añadió una transcripción")
     hub.broadcast("transcripts", user["display_name"])
@@ -302,6 +324,7 @@ def transcript_to_task(tid: int, body: ToTask, user: dict = Depends(current_user
         """INSERT INTO tasks(title, description, status, priority, creator_id)
            VALUES(?,?,'todo','medium',?)""",
         (title, row["text"], user["id"]),
+        returning_id=True,
     )
     log_activity(user, f"{user['display_name']} convirtió una transcripción en tarea")
     hub.broadcast("tasks", user["display_name"])

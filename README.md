@@ -101,6 +101,10 @@ Data lives in `data/whisperflow.db` (SQLite) — back up that one file.
   included). Give the container ~2 GB RAM for the `small` model. Put a reverse
   proxy with HTTPS in front (Caddy/Traefik) if it's exposed to the internet —
   the browser only allows microphone access on `localhost` or HTTPS.
+- **Cloud (Supabase + Render + Vercel):** step-by-step guide in
+  [DEPLOY.md](DEPLOY.md). Set `DATABASE_URL` and the backend switches from
+  SQLite to Postgres automatically; `WF_CORS_ORIGINS` and
+  `server/static/config.js` wire a separately-hosted frontend to the API.
 
 ## Privacy notes
 

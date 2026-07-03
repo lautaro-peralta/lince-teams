@@ -4,7 +4,11 @@
     {
       "name": "teams",
       "runtimeExecutable": ".venv\\Scripts\\python.exe",
-      "runtimeArgs": ["-m", "uvicorn", "server.main:app", "--port", "8000"],
+      "runtimeArgs": [
+        "-c",
+        "import os, uvicorn; uvicorn.run('server.main:app', host='127.0.0.1', port=int(os.environ.get('PORT', '8000')))"
+      ],
+      "autoPort": true,
       "port": 8000
     }
   ]

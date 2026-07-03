@@ -6,9 +6,10 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 
 const STATUS_LABEL = { todo: "Por hacer", doing: "En curso", done: "Hecho" };
-const STATUS_COLOR = { todo: "#8b93a7", doing: "#6d6ffb", done: "#34d399" };
-const PRIORITY_LABEL = { low: "Baja", medium: "Media", high: "Alta" };
-const AVATAR_COLORS = ["#6d6ffb", "#9b6dfb", "#d96dfb", "#fb6d9b", "#fb9b6d", "#34d399", "#38bdf8"];
+const PRIORITY_LABEL = { low: "BAJA", medium: "MEDIA", high: "ALTA" };
+// Backend en otro origen (Vercel + Render): se define en config.js
+const API_BASE = (window.WF_API_BASE || "").replace(/\/$/, "");
+const MIC_SVG = `<svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
 
 const state = {
   token: localStorage.getItem("wf_token"),
@@ -30,19 +31,19 @@ function initials(name) {
   return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
 }
 
-function avatarColor(name) {
-  let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return AVATAR_COLORS[h % AVATAR_COLORS.length];
-}
-
 function avatarHtml(name, cls = "avatar") {
   if (!name) return "";
-  return `<span class="${cls}" style="background:${avatarColor(name)}" title="${esc(name)}">${esc(initials(name))}</span>`;
+  return `<span class="${cls}" title="${esc(name)}">${esc(initials(name))}</span>`;
+}
+
+function parseTs(ts) {
+  // SQLite entrega "YYYY-MM-DD HH:MM:SS" (UTC sin zona); Postgres, ISO con zona.
+  if (/[zZ]$|[+-]\d\d:?\d\d$/.test(ts)) return new Date(ts);
+  return new Date(ts.replace(" ", "T") + "Z");
 }
 
 function timeAgo(iso) {
-  const secs = (Date.now() - new Date(iso + "Z").getTime()) / 1000;
+  const secs = (Date.now() - parseTs(iso).getTime()) / 1000;
   if (secs < 60) return "ahora";
   if (secs < 3600) return `hace ${Math.floor(secs / 60)} min`;
   if (secs < 86400) return `hace ${Math.floor(secs / 3600)} h`;
@@ -64,7 +65,7 @@ async function api(path, options = {}) {
     headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(options.body);
   }
-  const res = await fetch(`/api${path}`, { ...options, headers });
+  const res = await fetch(`${API_BASE}/api${path}`, { ...options, headers });
   if (res.status === 401 && path !== "/login") {
     logoutLocal();
     throw new Error("Sesión caducada, entra de nuevo.");
@@ -141,8 +142,8 @@ function showView(view) {
 }
 
 function connectWs() {
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(`${proto}//${location.host}/ws?token=${state.token}`);
+  const base = API_BASE || location.origin;
+  const ws = new WebSocket(base.replace(/^http/, "ws") + `/ws?token=${state.token}`);
   state.ws = ws;
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
@@ -172,22 +173,22 @@ async function renderDashboard() {
   $("#main").innerHTML = `
     <div class="view-head">
       <div>
-        <h2>Hola, ${esc(state.me.display_name)} 👋</h2>
-        <div class="view-sub">${esc(today)} · ${total} tareas en total</div>
+        <h2>Hola, ${esc(state.me.display_name)}.</h2>
+        <div class="view-sub">${esc(today)} — ${total} tareas en total</div>
       </div>
       <button class="btn btn-primary" id="dash-new-task">+ Nueva tarea</button>
     </div>
     <div class="stat-grid">
-      ${stat(d.counts.todo, "Por hacer", STATUS_COLOR.todo)}
-      ${stat(d.counts.doing, "En curso", STATUS_COLOR.doing)}
-      ${stat(d.counts.done, "Hechas", STATUS_COLOR.done)}
-      ${stat(d.transcripts, "Transcripciones", "#9b6dfb")}
+      ${stat(d.counts.todo, "POR HACER")}
+      ${stat(d.counts.doing, "EN CURSO")}
+      ${stat(d.counts.done, "HECHAS")}
+      ${stat(d.transcripts, "TRANSCRIPCIONES")}
     </div>
     <div class="dash-cols">
       <div>
         <div class="card">
           <h3>Mis tareas pendientes</h3>
-          ${d.mine.length ? d.mine.map(miniTask).join("") : `<div class="empty">Nada pendiente. 🎉</div>`}
+          ${d.mine.length ? d.mine.map(miniTask).join("") : `<div class="empty">Nada pendiente.</div>`}
         </div>
       </div>
       <div>
@@ -213,9 +214,8 @@ async function renderDashboard() {
   $$(".mini-task[data-id]").forEach(el =>
     el.onclick = async () => taskModal(await api(`/tasks`).then(ts => ts.find(t => t.id == el.dataset.id))));
 
-  function stat(num, label, color) {
-    return `<div class="stat"><div class="num">${num}</div><div class="lbl">${esc(label)}</div>
-            <div class="bar" style="background:${color}"></div></div>`;
+  function stat(num, label) {
+    return `<div class="stat"><div class="lbl">${esc(label)}</div><div class="num">${num}</div></div>`;
   }
   function miniTask(t) {
     const due = t.due_date ? ` · vence ${t.due_date}` : "";
@@ -273,8 +273,7 @@ async function renderBoard() {
     return `
     <div class="col" data-status="${status}">
       <div class="col-head">
-        <span class="dot" style="background:${STATUS_COLOR[status]}"></span>
-        ${STATUS_LABEL[status]} <span class="count">${items.length}</span>
+        ${STATUS_LABEL[status].toUpperCase()} <span class="count">${items.length}</span>
       </div>
       ${items.map(taskCard).join("") || `<div class="empty">Vacío</div>`}
     </div>`;
@@ -288,7 +287,7 @@ async function renderBoard() {
       ${t.description ? `<div class="desc">${esc(t.description)}</div>` : ""}
       <div class="task-foot">
         <span class="pill ${t.priority}">${PRIORITY_LABEL[t.priority]}</span>
-        ${t.due_date ? `<span class="due ${late ? "late" : ""}">📅 ${t.due_date}</span>` : ""}
+        ${t.due_date ? `<span class="due ${late ? "late" : ""}">${late ? "VENCIDA " : ""}${t.due_date}</span>` : ""}
         ${avatarHtml(t.assignee_name)}
       </div>
     </div>`;
@@ -382,8 +381,8 @@ async function renderTranscripts() {
       <div class="view-sub">Graba desde el navegador; el audio se transcribe en vuestro propio servidor.</div></div>
     </div>
     <div class="rec-card">
-      <button class="rec-btn" id="rec-btn" title="Grabar">🎙️</button>
-      <div class="rec-status" id="rec-status">Pulsa para grabar</div>
+      <button class="rec-btn" id="rec-btn" title="Grabar">${MIC_SVG}</button>
+      <div class="rec-status" id="rec-status">PULSA PARA GRABAR</div>
       <div class="rec-hint">También puedes dictar en cualquier app de tu PC con la app de escritorio (mantén F9).</div>
     </div>
     ${items.map(ts => `
@@ -446,7 +445,7 @@ async function toggleRecording() {
       stream.getTracks().forEach(t => t.stop());
       clearInterval(recTimer);
       btn.classList.remove("recording");
-      status.textContent = "Transcribiendo…";
+      status.textContent = "TRANSCRIBIENDO…";
       btn.disabled = true;
       try {
         const ext = (recorder.mimeType || "").includes("mp4") ? "mp4" : "webm";
@@ -457,7 +456,7 @@ async function toggleRecording() {
         renderTranscripts();
       } catch (err) {
         toast(err.message, "error");
-        status.textContent = "Pulsa para grabar";
+        status.textContent = "PULSA PARA GRABAR";
       } finally {
         btn.disabled = false;
       }
@@ -466,9 +465,9 @@ async function toggleRecording() {
     btn.classList.add("recording");
     const t0 = Date.now();
     recTimer = setInterval(() => {
-      status.textContent = `Grabando… ${Math.floor((Date.now() - t0) / 1000)}s — pulsa para terminar`;
+      status.textContent = `GRABANDO ${Math.floor((Date.now() - t0) / 1000)}s — PULSA PARA TERMINAR`;
     }, 250);
-    status.textContent = "Grabando… pulsa para terminar";
+    status.textContent = "GRABANDO — PULSA PARA TERMINAR";
   } catch (err) {
     toast(`No se pudo acceder al micrófono: ${err.message}`, "error");
   }
