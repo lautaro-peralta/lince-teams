@@ -1,0 +1,12 @@
+services:
+  whisperflow-teams:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data              # base de datos SQLite
+      - hf-cache:/root/.cache/huggingface  # modelo Whisper (se descarga una vez)
+    restart: unless-stopped
+
+volumes:
+  hf-cache:

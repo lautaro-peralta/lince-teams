@@ -21,12 +21,19 @@ class Transcriber:
         segments, _ = self.model.transcribe(silence)
         list(segments)  # segments are lazy; consume to actually run the model
 
-    def transcribe(self, audio: np.ndarray) -> str:
-        segments, _info = self.model.transcribe(
+    def transcribe(self, audio) -> str:
+        return self.transcribe_with_info(audio)[0]
+
+    def transcribe_with_info(self, audio) -> tuple[str, str | None, float]:
+        """Accepts a float32 array or a path to an audio file.
+
+        Returns (text, detected language, audio duration in seconds)."""
+        segments, info = self.model.transcribe(
             audio,
             language=self.cfg.language,
             beam_size=self.cfg.beam_size,
             vad_filter=True,
             condition_on_previous_text=False,
         )
-        return " ".join(s.text.strip() for s in segments).strip()
+        text = " ".join(s.text.strip() for s in segments).strip()
+        return text, info.language, info.duration
