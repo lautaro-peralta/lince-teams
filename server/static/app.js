@@ -195,10 +195,15 @@ function showView(view) {
 }
 
 async function connectWs() {
-  const base = API_BASE || location.origin;
   const tok = await currentToken();
   if (!tok) return;
-  const ws = new WebSocket(base.replace(/^http/, "ws") + `/ws?token=${tok}`);
+  // Base absoluta del backend: soporta API_BASE vacío (mismo origen), una URL
+  // completa (Render en otro dominio) o un prefijo de ruta como "/teams" (cuando
+  // se sirve tras el reverse-proxy same-origin). new URL(...) resuelve los tres.
+  const httpBase = API_BASE
+    ? new URL(API_BASE, location.origin).href.replace(/\/+$/, "")
+    : location.origin;
+  const ws = new WebSocket(httpBase.replace(/^http/, "ws") + `/ws?token=${tok}`);
   state.ws = ws;
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
