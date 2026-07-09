@@ -79,6 +79,9 @@ equipo aprobado puede usar el servicio.
 - **Docker:** `docker compose up -d --build` en cualquier VPS.
 - **Nube (Supabase + Render + Vercel):** guía paso a paso en [DEPLOY.md](DEPLOY.md).
   Con `DATABASE_URL` el backend pasa de SQLite a Postgres automáticamente.
+- **Oracle Cloud (Always Free, con Whisper + WebSocket):** guía en
+  [`deploy/DEPLOY-oracle.md`](deploy/DEPLOY-oracle.md) — la VM no se duerme y la
+  A1 (ARM) tiene RAM de sobra para el modelo; ideal para el modo unificado.
 
 ## Privacidad
 
