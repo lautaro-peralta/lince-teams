@@ -14,6 +14,14 @@ from pathlib import Path
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 IS_PG = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 
+# Modo unificado: comparte el login del panel de Lince (Supabase Auth). Se activa
+# cuando hay URL + anon key de Supabase; entonces los usuarios se espejan desde
+# `public.profiles` (roles admin/socio) y no hay registro/login propios.
+IS_SUPABASE = bool(
+    os.environ.get("SUPABASE_URL")
+    and (os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("SUPABASE_KEY"))
+)
+
 if IS_PG:
     import psycopg
     from psycopg.rows import dict_row
@@ -47,6 +55,7 @@ CREATE TABLE IF NOT EXISTS users(
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'member',
   status TEXT NOT NULL DEFAULT 'pending',
+  auth_id TEXT UNIQUE,
   created_at {_TS}
 );
 CREATE TABLE IF NOT EXISTS sessions(
@@ -123,6 +132,7 @@ def _migrate(conn) -> None:
     if IS_PG:
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member'")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_id TEXT")
         fresh_columns = False
     else:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -130,12 +140,23 @@ def _migrate(conn) -> None:
         if fresh_columns:
             conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'")
             conn.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+        if "auth_id" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN auth_id TEXT")
+
+    # auth_id enlaza el usuario local con su cuenta de Supabase (modo unificado).
+    # Índice único que tolera múltiples NULL (las cuentas legacy no lo tienen).
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_auth_id_idx ON users(auth_id)")
 
     if fresh_columns:
         # Existing accounts predate the approval flow: keep them working.
         conn.execute("UPDATE users SET status = 'active'")
 
-    # There must always be at least one admin: promote the oldest account.
+    # En modo unificado (Supabase) los roles los gestiona el panel de Lince, así
+    # que NO auto-promovemos: un socio espejado no debe volverse admin de Teams.
+    if IS_SUPABASE:
+        return
+
+    # Standalone: siempre debe haber al menos un admin (promueve al más antiguo).
     row = conn.execute("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").fetchone()
     n_admins = row["n"] if isinstance(row, dict) or hasattr(row, "keys") else row[0]
     if n_admins == 0:

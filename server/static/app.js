@@ -25,7 +25,25 @@ const state = {
   ws: null,
   renderSeq: 0, // guards against a stale async render overwriting a newer view
   wb: null,     // whiteboard runtime state while that view is mounted
+  supabase: null, // cliente de Supabase en modo unificado (login compartido)
+  cfg: null,      // respuesta de /api/config
 };
+
+/* En el modo unificado el token es el JWT de la sesión de Supabase (compartida
+   con el panel /admin). Lo tomamos fresco en cada request; supabase-js lo
+   refresca solo. En standalone se usa el token de sesión propio guardado. */
+async function currentToken() {
+  if (state.supabase) {
+    const { data: { session } } = await state.supabase.auth.getSession();
+    return session?.access_token || null;
+  }
+  return state.token;
+}
+
+function goToLogin() {
+  const url = (state.cfg && state.cfg.loginUrl) || "/admin";
+  location.replace(url + "?next=" + encodeURIComponent(location.pathname));
+}
 
 /* ---------- helpers ---------- */
 
@@ -68,14 +86,16 @@ function toast(msg, kind = "") {
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
-  if (state.token) headers["Authorization"] = `Bearer ${state.token}`;
+  const tok = await currentToken();
+  if (tok) headers["Authorization"] = `Bearer ${tok}`;
   if (options.body && !(options.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(options.body);
   }
   const res = await fetch(`${API_BASE}/api${path}`, { ...options, headers });
   if (res.status === 401 && path !== "/login") {
-    logoutLocal();
+    if (state.supabase) goToLogin();
+    else logoutLocal();
     throw new Error("Sesión caducada, entra de nuevo.");
   }
   if (!res.ok) {
@@ -148,7 +168,9 @@ async function enterApp() {
   $("#app").classList.remove("hidden");
   $("#me-name").textContent = state.me.display_name;
   $("#me-avatar").outerHTML = avatarHtml(state.me.display_name).replace('class="avatar"', 'class="avatar" id="me-avatar"');
-  $("#nav-team").classList.toggle("hidden", state.me.role !== "admin");
+  // En modo unificado los miembros y roles se gestionan en el panel de Lince,
+  // así que la pestaña Equipo (aprobación/roles locales) no aplica.
+  $("#nav-team").classList.toggle("hidden", state.me.role !== "admin" || !!state.supabase);
   connectWs();
   showView(state.view);
 }
@@ -162,7 +184,7 @@ const VIEWS = {
 };
 
 function showView(view) {
-  if (view === "team" && state.me.role !== "admin") view = "dashboard";
+  if (view === "team" && (state.me.role !== "admin" || state.supabase)) view = "dashboard";
   if (state.view === "whiteboard" && view !== "whiteboard") state.wb = null;
   state.view = view;
   $$(".nav-item").forEach(b => {
@@ -172,9 +194,11 @@ function showView(view) {
   VIEWS[view]();
 }
 
-function connectWs() {
+async function connectWs() {
   const base = API_BASE || location.origin;
-  const ws = new WebSocket(base.replace(/^http/, "ws") + `/ws?token=${state.token}`);
+  const tok = await currentToken();
+  if (!tok) return;
+  const ws = new WebSocket(base.replace(/^http/, "ws") + `/ws?token=${tok}`);
   state.ws = ws;
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
@@ -190,7 +214,8 @@ function connectWs() {
     if (msg.scope === "transcripts" && state.view === "transcripts") showView(state.view);
     if (msg.scope === "board" && state.wb) wbApply(msg.data);
   };
-  ws.onclose = () => setTimeout(() => state.token && connectWs(), 3000);
+  // Reintenta mientras siga habiendo sesión (token propio o de Supabase).
+  ws.onclose = () => setTimeout(() => { if (state.me) connectWs(); }, 3000);
   const ping = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) ws.send("ping");
     else clearInterval(ping);
@@ -1031,16 +1056,68 @@ async function renderTeam() {
 
 /* ---------- boot ---------- */
 
-setupAuth();
 $$(".nav-item").forEach(b => (b.onclick = () => showView(b.dataset.view)));
 $("#btn-logout").onclick = async () => {
+  if (state.supabase) {
+    await state.supabase.auth.signOut();
+    goToLogin();
+    return;
+  }
   try { await api("/logout", { method: "POST" }); } catch {}
   logoutLocal();
 };
 
+/* El acceso se resuelve según /api/config: modo unificado (JWT de Supabase,
+   login compartido con el panel) o standalone (login usuario/contraseña). */
 (async () => {
+  let cfg = { supabase: false };
+  try { cfg = await (await fetch(`${API_BASE}/api/config`)).json(); } catch {}
+  state.cfg = cfg;
+
+  if (cfg.supabase && window.supabase && window.supabase.createClient) {
+    await bootSupabase(cfg);
+    return;
+  }
+
+  // Standalone: login propio.
+  setupAuth();
   if (state.token) {
     try { await enterApp(); return; } catch { logoutLocal(); }
   }
   $("#auth-screen").classList.remove("hidden");
 })();
+
+/* Modo unificado: la sesión se comparte con el panel /admin (mismo origen,
+   mismo proyecto de Supabase). Sin sesión, se redirige al login del panel. */
+async function bootSupabase(cfg) {
+  state.supabase = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+
+  let entering = false;
+  const onSession = async (session) => {
+    if (!session) { state.me = null; goToLogin(); return; }
+    if (state.me || entering) return; // ya dentro (refresh de token): no re-montar
+    entering = true;
+    try {
+      await enterApp();
+    } catch (err) {
+      // Logueado pero sin acceso a Teams (403), o error transitorio.
+      $("#app").classList.add("hidden");
+      $("#auth-screen").classList.remove("hidden");
+      $("#auth-screen").innerHTML =
+        `<div class="auth-card card-featured" style="text-align:center">
+           <div class="auth-brand">Lince <em>Teams</em></div>
+           <p class="auth-notice" style="margin-top:16px">${esc(err.message || "No se pudo cargar tu sesión.")}</p>
+           <a class="btn-ghost btn-block" href="${(cfg.loginUrl || "/admin")}" style="margin-top:16px;display:inline-block">Ir al panel</a>
+         </div>`;
+    } finally {
+      entering = false;
+    }
+  };
+
+  // Reacciona a login/logout/refresh igual que el Startup OS. Se difiere con
+  // setTimeout: supabase-js espera el callback antes de resolver getSession().
+  state.supabase.auth.onAuthStateChange((_event, session) => {
+    if (_event === "TOKEN_REFRESHED" && state.me) return; // ya montado; el token se toma fresco
+    setTimeout(() => onSession(session), 0);
+  });
+}
