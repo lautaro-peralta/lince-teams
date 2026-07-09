@@ -102,7 +102,7 @@ class App:
     # -- lifecycle ------------------------------------------------------------
 
     def run(self) -> None:
-        _log(f"WhisperFlow v{__version__} — private, local dictation")
+        _log(f"Lince Dictado v{__version__} — private, local dictation")
         _log(f"    config: {CONFIG_PATH}")
         _log(f"[*] Loading model '{self.cfg.model}' ({self.cfg.device})...")
         self.transcriber = Transcriber(self.cfg)

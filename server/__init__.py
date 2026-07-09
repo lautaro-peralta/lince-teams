@@ -1,1 +1,1 @@
-"""WhisperFlow Teams — self-hosted team workspace with local transcription."""
+"""Tinta Teams — self-hosted team workspace with local transcription."""

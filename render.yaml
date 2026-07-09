@@ -1,16 +1,16 @@
 # Blueprint de Render: crea el backend con "New > Blueprint" apuntando al repo.
 services:
   - type: web
-    name: whisperflow-teams
+    name: lince-teams
     runtime: docker
     plan: starter          # 512 MB (free) no alcanza para el modelo "small"; starter da 2 GB
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL   # cadena de conexión de Supabase (Session pooler)
         sync: false
-      - key: WF_CORS_ORIGINS # p. ej. https://tu-frontend.vercel.app
+      - key: LINCE_CORS_ORIGINS # p. ej. https://tu-frontend.vercel.app
         sync: false
-      - key: WF_MODEL       # "base" en instancias justas de RAM; "small" con 2 GB
+      - key: LINCE_MODEL       # "base" en instancias justas de RAM; "small" con 2 GB
         value: small
-      - key: WF_COMPUTE_TYPE
+      - key: LINCE_COMPUTE_TYPE
         value: int8

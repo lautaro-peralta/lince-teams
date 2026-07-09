@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-".venv\Scripts\python.exe" -m whisperflow %*
+".venv\Scripts\python.exe" -m lince %*

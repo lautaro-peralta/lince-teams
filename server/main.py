@@ -1,5 +1,6 @@
-"""WhisperFlow Teams API: auth, kanban tasks, shared transcriptions,
-dashboard stats, and a WebSocket that keeps every connected teammate in sync.
+"""Lince Teams API: auth with admin approval, kanban tasks, shared
+transcriptions (usable from n8n via API tokens), a realtime whiteboard,
+dashboard stats, and a WebSocket that keeps every teammate in sync.
 
 Run with: uvicorn server.main:app --host 0.0.0.0 --port 8000
 """
@@ -9,6 +10,8 @@ import json
 import os
 import tempfile
 import threading
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import (
@@ -24,17 +27,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from whisperflow import config as wf_config
-from whisperflow.cleanup import clean
+from lince import config as lince_config
+from lince.cleanup import clean
 
 from . import auth, db
 
-app = FastAPI(title="WhisperFlow Teams")
+app = FastAPI(title="Lince Teams")
 db.init()
 
 # Frontend served from another origin (e.g. Vercel)? List it here:
-#   WF_CORS_ORIGINS=https://tuapp.vercel.app,https://otradominio.com
-_cors = [o.strip() for o in os.environ.get("WF_CORS_ORIGINS", "").split(",") if o.strip()]
+#   LINCE_CORS_ORIGINS=https://tuapp.vercel.app,https://otradominio.com
+_cors = [o.strip() for o in os.environ.get("LINCE_CORS_ORIGINS", "").split(",") if o.strip()]
 if _cors:
     app.add_middleware(
         CORSMiddleware,
@@ -45,6 +48,10 @@ if _cors:
 
 STATUSES = {"todo", "doing", "done"}
 PRIORITIES = {"low", "medium", "high"}
+ROLES = {"admin", "member"}
+USER_STATUSES = {"active", "pending"}
+BOARD_KINDS = {"note", "stroke", "image"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 # -- transcription (lazy-loaded, serialized) ---------------------------------
 
@@ -56,14 +63,14 @@ def get_transcriber():
     global _transcriber
     with _transcriber_lock:
         if _transcriber is None:
-            from whisperflow.transcribe import Transcriber
+            from lince.transcribe import Transcriber
 
-            cfg = wf_config.load()
+            cfg = lince_config.load()
             # Hosted deployments tune the model by env var instead of config.json
-            # (e.g. WF_MODEL=base on instances with little RAM).
-            cfg.model = os.environ.get("WF_MODEL", cfg.model)
-            cfg.device = os.environ.get("WF_DEVICE", cfg.device)
-            cfg.compute_type = os.environ.get("WF_COMPUTE_TYPE", cfg.compute_type)
+            # (e.g. LINCE_MODEL=base on instances with little RAM).
+            cfg.model = os.environ.get("LINCE_MODEL", cfg.model)
+            cfg.device = os.environ.get("LINCE_DEVICE", cfg.device)
+            cfg.compute_type = os.environ.get("LINCE_COMPUTE_TYPE", cfg.compute_type)
             _transcriber = Transcriber(cfg)
         return _transcriber
 
@@ -79,11 +86,14 @@ class Hub:
         self.loop = asyncio.get_running_loop()
         self.clients.add(ws)
 
-    def broadcast(self, scope: str, by: str) -> None:
+    def broadcast(self, scope: str, by: str, data: dict | None = None) -> None:
         """Thread-safe: callable from worker threads running sync endpoints."""
         if not self.clients or self.loop is None:
             return
-        message = json.dumps({"type": "changed", "scope": scope, "by": by})
+        message = json.dumps(
+            {"type": "changed", "scope": scope, "by": by, "data": data},
+            default=str,
+        )
 
         async def _send():
             dead = set()
@@ -113,6 +123,14 @@ def current_user(authorization: str | None = Header(default=None)) -> dict:
     user = auth.user_for_token(token)
     if not user:
         raise HTTPException(401, "No autorizado")
+    if user["status"] != "active":
+        raise HTTPException(403, "Tu cuenta está pendiente de aprobación.")
+    return user
+
+
+def current_admin(user: dict = Depends(current_user)) -> dict:
+    if user["role"] != "admin":
+        raise HTTPException(403, "Solo para administradores.")
     return user
 
 
@@ -129,17 +147,31 @@ def register(body: Credentials):
         raise HTTPException(400, "Usuario mínimo 2 caracteres y contraseña mínimo 6.")
     if db.query_one("SELECT id FROM users WHERE username = ?", (username,)):
         raise HTTPException(409, "Ese usuario ya existe.")
+
+    first_user = db.query_one("SELECT COUNT(*) AS n FROM users")["n"] == 0
+    role = "admin" if first_user else "member"
+    status = "active" if first_user else "pending"
+
     salt, digest = auth.hash_password(body.password)
     user_id = db.execute(
-        "INSERT INTO users(username, display_name, salt, password_hash) VALUES(?,?,?,?)",
-        (username, (body.display_name or body.username).strip(), salt, digest),
+        """INSERT INTO users(username, display_name, salt, password_hash, role, status)
+           VALUES(?,?,?,?,?,?)""",
+        (username, (body.display_name or body.username).strip(), salt, digest, role, status),
         returning_id=True,
     )
-    token = auth.create_session(user_id)
-    user = db.query_one("SELECT id, username, display_name FROM users WHERE id=?", (user_id,))
-    log_activity(user, f"{user['display_name']} se unió al equipo")
-    hub.broadcast("users", user["display_name"])
-    return {"token": token, "user": user}
+    user = db.query_one(
+        "SELECT id, username, display_name, role, status FROM users WHERE id = ?",
+        (user_id,),
+    )
+
+    if status == "pending":
+        log_activity(user, f"{user['display_name']} solicitó unirse al equipo")
+        hub.broadcast("users", user["display_name"])
+        return {"pending": True,
+                "detail": "Cuenta creada. Un administrador debe aprobarla antes de entrar."}
+
+    log_activity(user, f"{user['display_name']} creó el equipo")
+    return {"token": auth.create_session(user_id), "user": user}
 
 
 @app.post("/api/login")
@@ -149,16 +181,19 @@ def login(body: Credentials):
     )
     if not row or not auth.verify_password(body.password, row["salt"], row["password_hash"]):
         raise HTTPException(401, "Usuario o contraseña incorrectos.")
-    token = auth.create_session(row["id"])
+    if row["status"] != "active":
+        raise HTTPException(403, "Tu cuenta espera la aprobación del administrador.")
     return {
-        "token": token,
-        "user": {k: row[k] for k in ("id", "username", "display_name")},
+        "token": auth.create_session(row["id"]),
+        "user": {k: row[k] for k in ("id", "username", "display_name", "role", "status")},
     }
 
 
 @app.post("/api/logout")
 def logout(user: dict = Depends(current_user), authorization: str = Header(default="")):
-    auth.destroy_session(authorization[7:])
+    token = authorization[7:]
+    if not token.startswith(auth.API_TOKEN_PREFIX):
+        auth.destroy_session(token)
     return {"ok": True}
 
 
@@ -169,7 +204,103 @@ def me(user: dict = Depends(current_user)):
 
 @app.get("/api/users")
 def users(user: dict = Depends(current_user)):
-    return db.query_all("SELECT id, username, display_name FROM users ORDER BY display_name")
+    return db.query_all(
+        """SELECT id, username, display_name FROM users
+           WHERE status = 'active' ORDER BY display_name"""
+    )
+
+
+# -- administración del equipo -----------------------------------------------------
+
+@app.get("/api/admin/members")
+def admin_members(admin: dict = Depends(current_admin)):
+    return db.query_all(
+        """SELECT id, username, display_name, role, status, created_at
+           FROM users ORDER BY status DESC, created_at"""
+    )
+
+
+class MemberPatch(BaseModel):
+    role: str | None = None
+    status: str | None = None
+
+
+@app.patch("/api/admin/members/{member_id}")
+def admin_update_member(member_id: int, body: MemberPatch,
+                        admin: dict = Depends(current_admin)):
+    member = db.query_one("SELECT * FROM users WHERE id = ?", (member_id,))
+    if not member:
+        raise HTTPException(404, "Miembro no encontrado.")
+    changes = body.model_dump(exclude_unset=True)
+    if "role" in changes and changes["role"] not in ROLES:
+        raise HTTPException(400, "Rol inválido.")
+    if "status" in changes and changes["status"] not in USER_STATUSES:
+        raise HTTPException(400, "Estado inválido.")
+    if member_id == admin["id"] and (
+        changes.get("role") == "member" or changes.get("status") == "pending"
+    ):
+        raise HTTPException(400, "No puedes quitarte el acceso a ti mismo.")
+    if changes:
+        sets = ", ".join(f"{k} = ?" for k in changes)
+        db.execute(f"UPDATE users SET {sets} WHERE id = ?", (*changes.values(), member_id))
+        if changes.get("status") == "active" and member["status"] != "active":
+            log_activity(admin, f"{admin['display_name']} aprobó a {member['display_name']}")
+        if changes.get("status") == "pending":
+            # Revocar acceso: además, cerramos sus sesiones y tokens.
+            db.execute("DELETE FROM sessions WHERE user_id = ?", (member_id,))
+            db.execute("DELETE FROM api_tokens WHERE user_id = ?", (member_id,))
+            log_activity(admin, f"{admin['display_name']} revocó el acceso de {member['display_name']}")
+        hub.broadcast("users", admin["display_name"])
+    return db.query_one(
+        "SELECT id, username, display_name, role, status, created_at FROM users WHERE id = ?",
+        (member_id,),
+    )
+
+
+@app.delete("/api/admin/members/{member_id}")
+def admin_delete_member(member_id: int, admin: dict = Depends(current_admin)):
+    if member_id == admin["id"]:
+        raise HTTPException(400, "No puedes eliminarte a ti mismo.")
+    member = db.query_one("SELECT * FROM users WHERE id = ?", (member_id,))
+    if not member:
+        raise HTTPException(404, "Miembro no encontrado.")
+    db.execute("DELETE FROM users WHERE id = ?", (member_id,))
+    log_activity(admin, f"{admin['display_name']} eliminó la cuenta de {member['display_name']}")
+    hub.broadcast("users", admin["display_name"])
+    return {"ok": True}
+
+
+# -- tokens de API (n8n, scripts) ----------------------------------------------------
+
+class TokenIn(BaseModel):
+    name: str = "n8n"
+
+
+@app.post("/api/tokens")
+def create_token(body: TokenIn, user: dict = Depends(current_user)):
+    raw, row_id = auth.create_api_token(user["id"], body.name.strip() or "token")
+    row = db.query_one(
+        "SELECT id, name, prefix, created_at FROM api_tokens WHERE id = ?", (row_id,)
+    )
+    return {**row, "token": raw}  # el token en claro solo se devuelve aquí
+
+
+@app.get("/api/tokens")
+def list_tokens(user: dict = Depends(current_user)):
+    return db.query_all(
+        """SELECT id, name, prefix, created_at FROM api_tokens
+           WHERE user_id = ? ORDER BY created_at DESC""",
+        (user["id"],),
+    )
+
+
+@app.delete("/api/tokens/{token_id}")
+def delete_token(token_id: int, user: dict = Depends(current_user)):
+    row = db.query_one("SELECT * FROM api_tokens WHERE id = ?", (token_id,))
+    if not row or row["user_id"] != user["id"]:
+        raise HTTPException(404, "Token no encontrado.")
+    db.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
+    return {"ok": True}
 
 
 # -- tasks -----------------------------------------------------------------------
@@ -218,9 +349,13 @@ def create_task(body: TaskIn, user: dict = Depends(current_user)):
          body.assignee_id, user["id"], body.due_date),
         returning_id=True,
     )
-    log_activity(user, f"{user['display_name']} creó la tarea «{body.title.strip()}»")
+    task = db.query_one(TASK_SELECT + " WHERE t.id = ?", (task_id,))
+    if task["assignee_name"] and task["assignee_id"] != user["id"]:
+        log_activity(user, f"{user['display_name']} asignó «{task['title']}» a {task['assignee_name']}")
+    else:
+        log_activity(user, f"{user['display_name']} creó la tarea «{task['title']}»")
     hub.broadcast("tasks", user["display_name"])
-    return db.query_one(TASK_SELECT + " WHERE t.id = ?", (task_id,))
+    return task
 
 
 @app.patch("/api/tasks/{task_id}")
@@ -239,11 +374,15 @@ def update_task(task_id: int, body: TaskPatch, user: dict = Depends(current_user
             f"UPDATE tasks SET {sets}, updated_at = {db.NOW} WHERE id = ?",
             (*changes.values(), task_id),
         )
+        new = db.query_one(TASK_SELECT + " WHERE t.id = ?", (task_id,))
         if changes.get("status") == "done" and task["status"] != "done":
             log_activity(user, f"{user['display_name']} completó «{task['title']}»")
+        elif "assignee_id" in changes and new["assignee_name"] and changes["assignee_id"] != user["id"]:
+            log_activity(user, f"{user['display_name']} asignó «{task['title']}» a {new['assignee_name']}")
         else:
             log_activity(user, f"{user['display_name']} actualizó «{task['title']}»")
         hub.broadcast("tasks", user["display_name"])
+        return new
     return db.query_one(TASK_SELECT + " WHERE t.id = ?", (task_id,))
 
 
@@ -273,7 +412,7 @@ def transcribe(audio: UploadFile, user: dict = Depends(current_user)):
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    text = clean(text, wf_config.load())
+    text = clean(text, lince_config.load())
     if not text:
         raise HTTPException(422, "No se reconoció voz en el audio.")
     tid = db.execute(
@@ -303,8 +442,8 @@ def delete_transcript(tid: int, user: dict = Depends(current_user)):
     row = db.query_one("SELECT * FROM transcripts WHERE id = ?", (tid,))
     if not row:
         raise HTTPException(404, "Transcripción no encontrada.")
-    if row["user_id"] != user["id"]:
-        raise HTTPException(403, "Solo el autor puede borrar su transcripción.")
+    if row["user_id"] != user["id"] and user["role"] != "admin":
+        raise HTTPException(403, "Solo el autor o un admin puede borrarla.")
     db.execute("DELETE FROM transcripts WHERE id = ?", (tid,))
     hub.broadcast("transcripts", user["display_name"])
     return {"ok": True}
@@ -312,6 +451,7 @@ def delete_transcript(tid: int, user: dict = Depends(current_user)):
 
 class ToTask(BaseModel):
     title: str | None = None
+    assignee_id: int | None = None
 
 
 @app.post("/api/transcripts/{tid}/to-task")
@@ -321,9 +461,9 @@ def transcript_to_task(tid: int, body: ToTask, user: dict = Depends(current_user
         raise HTTPException(404, "Transcripción no encontrada.")
     title = (body.title or row["text"][:70]).strip()
     task_id = db.execute(
-        """INSERT INTO tasks(title, description, status, priority, creator_id)
-           VALUES(?,?,'todo','medium',?)""",
-        (title, row["text"], user["id"]),
+        """INSERT INTO tasks(title, description, status, priority, assignee_id, creator_id)
+           VALUES(?,?,'todo','medium',?,?)""",
+        (title, row["text"], body.assignee_id, user["id"]),
         returning_id=True,
     )
     log_activity(user, f"{user['display_name']} convirtió una transcripción en tarea")
@@ -331,7 +471,118 @@ def transcript_to_task(tid: int, body: ToTask, user: dict = Depends(current_user
     return db.query_one(TASK_SELECT + " WHERE t.id = ?", (task_id,))
 
 
+# -- pizarra colaborativa -----------------------------------------------------------
+
+BOARD_SELECT = """
+SELECT b.*, u.display_name AS author FROM board_items b
+LEFT JOIN users u ON u.id = b.created_by
+"""
+
+
+class BoardItemIn(BaseModel):
+    kind: str
+    x: float = 0
+    y: float = 0
+    w: float | None = None
+    h: float | None = None
+    z: int = 0
+    color: str | None = None
+    content: str = ""
+
+
+class BoardItemPatch(BaseModel):
+    x: float | None = None
+    y: float | None = None
+    w: float | None = None
+    h: float | None = None
+    z: int | None = None
+    color: str | None = None
+    content: str | None = None
+
+
+@app.get("/api/board")
+def board_items(user: dict = Depends(current_user)):
+    return db.query_all(BOARD_SELECT + " ORDER BY b.z, b.id")
+
+
+@app.post("/api/board")
+def board_create(body: BoardItemIn, user: dict = Depends(current_user)):
+    if body.kind not in BOARD_KINDS:
+        raise HTTPException(400, "Tipo de elemento inválido.")
+    if len(body.content) > 200_000:
+        raise HTTPException(413, "Elemento demasiado grande.")
+    item_id = db.execute(
+        """INSERT INTO board_items(kind, x, y, w, h, z, color, content, created_by)
+           VALUES(?,?,?,?,?,?,?,?,?)""",
+        (body.kind, body.x, body.y, body.w, body.h, body.z, body.color,
+         body.content, user["id"]),
+        returning_id=True,
+    )
+    item = db.query_one(BOARD_SELECT + " WHERE b.id = ?", (item_id,))
+    hub.broadcast("board", user["display_name"], {"action": "upsert", "item": item})
+    return item
+
+
+@app.patch("/api/board/{item_id}")
+def board_update(item_id: int, body: BoardItemPatch, user: dict = Depends(current_user)):
+    if not db.query_one("SELECT id FROM board_items WHERE id = ?", (item_id,)):
+        raise HTTPException(404, "Elemento no encontrado.")
+    changes = body.model_dump(exclude_unset=True)
+    if changes:
+        sets = ", ".join(f"{k} = ?" for k in changes)
+        db.execute(
+            f"UPDATE board_items SET {sets}, updated_at = {db.NOW} WHERE id = ?",
+            (*changes.values(), item_id),
+        )
+    item = db.query_one(BOARD_SELECT + " WHERE b.id = ?", (item_id,))
+    hub.broadcast("board", user["display_name"], {"action": "upsert", "item": item})
+    return item
+
+
+@app.delete("/api/board/{item_id}")
+def board_delete(item_id: int, user: dict = Depends(current_user)):
+    item = db.query_one("SELECT * FROM board_items WHERE id = ?", (item_id,))
+    if not item:
+        raise HTTPException(404, "Elemento no encontrado.")
+    if item["kind"] == "image" and item["content"].startswith("/uploads/"):
+        (db.UPLOADS_DIR / Path(item["content"]).name).unlink(missing_ok=True)
+    db.execute("DELETE FROM board_items WHERE id = ?", (item_id,))
+    hub.broadcast("board", user["display_name"], {"action": "delete", "id": item_id})
+    return {"ok": True}
+
+
+@app.post("/api/board/image")
+def board_upload_image(image: UploadFile, user: dict = Depends(current_user)):
+    ext = Path(image.filename or "").suffix.lower()
+    if ext not in IMAGE_EXTS:
+        raise HTTPException(400, f"Formato no soportado ({ext or 'sin extensión'}).")
+    data = image.file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(413, "Imagen demasiado grande (máx. 5 MB).")
+    name = f"{uuid.uuid4().hex}{ext}"
+    (db.UPLOADS_DIR / name).write_bytes(data)
+    return {"url": f"/uploads/{name}"}
+
+
 # -- dashboard --------------------------------------------------------------------
+
+def _done_by_day(days: int = 14) -> list[dict]:
+    """Completed tasks bucketed by day, timezone-agnostic across both DBs."""
+    rows = db.query_all("SELECT updated_at FROM tasks WHERE status = 'done'")
+    today = datetime.now(timezone.utc).date()
+    buckets = {today - timedelta(days=i): 0 for i in range(days)}
+    for r in rows:
+        ts = r["updated_at"]
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts.replace(" ", "T")).replace(tzinfo=timezone.utc)
+        day = ts.astimezone(timezone.utc).date()
+        if day in buckets:
+            buckets[day] += 1
+    return [
+        {"day": d.isoformat(), "n": buckets[d]}
+        for d in sorted(buckets)
+    ]
+
 
 @app.get("/api/dashboard")
 def dashboard(user: dict = Depends(current_user)):
@@ -342,6 +593,7 @@ def dashboard(user: dict = Depends(current_user)):
         """SELECT u.display_name AS name, COUNT(t.id) AS open
            FROM users u LEFT JOIN tasks t
              ON t.assignee_id = u.id AND t.status != 'done'
+           WHERE u.status = 'active'
            GROUP BY u.id ORDER BY open DESC, name"""
     )
     mine = db.query_all(
@@ -351,16 +603,20 @@ def dashboard(user: dict = Depends(current_user)):
         (user["id"],),
     )
     activity = db.query_all(
-        """SELECT a.text, a.created_at FROM activity a
-           ORDER BY a.id DESC LIMIT 12"""
+        "SELECT a.text, a.created_at FROM activity a ORDER BY a.id DESC LIMIT 12"
     )
     transcript_count = db.query_one("SELECT COUNT(*) AS n FROM transcripts")["n"]
+    pending_members = db.query_one(
+        "SELECT COUNT(*) AS n FROM users WHERE status = 'pending'"
+    )["n"]
     return {
         "counts": counts,
         "per_user": per_user,
         "mine": mine,
         "activity": activity,
         "transcripts": transcript_count,
+        "done_by_day": _done_by_day(),
+        "pending_members": pending_members,
     }
 
 
@@ -373,7 +629,8 @@ def health():
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket, token: str = ""):
-    if not auth.user_for_token(token):
+    user = auth.user_for_token(token)
+    if not user or user["status"] != "active":
         await ws.close(code=4401)
         return
     await ws.accept()
@@ -385,8 +642,9 @@ async def ws_endpoint(ws: WebSocket, token: str = ""):
         hub.clients.discard(ws)
 
 
-# -- static frontend (must be mounted last) -----------------------------------------
+# -- static (mounted last so /api and /ws win) ---------------------------------------
 
+app.mount("/uploads", StaticFiles(directory=db.UPLOADS_DIR), name="uploads")
 app.mount(
     "/",
     StaticFiles(directory=Path(__file__).resolve().parent / "static", html=True),

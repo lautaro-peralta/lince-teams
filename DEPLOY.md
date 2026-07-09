@@ -2,7 +2,8 @@
 
 Arquitectura: **Vercel** sirve el frontend estático (`server/static/`),
 **Render** ejecuta el backend FastAPI (Docker) con el modelo Whisper, y
-**Supabase** aporta el Postgres donde viven usuarios, tareas y transcripciones.
+**Supabase** aporta el Postgres donde viven usuarios, tareas, pizarra y
+transcripciones.
 
 > Nota de privacidad: con este stack los datos y el audio pasan por esas tres
 > nubes (bajo tus cuentas). Para mantenerlo 100% en tu infraestructura, usa
@@ -19,15 +20,19 @@ Arquitectura: **Vercel** sirve el frontend estático (`server/static/`),
 ## 2. Render (backend + Whisper)
 
 1. En [render.com](https://render.com): **New → Blueprint**, conecta el repo
-   `whisper-flow` — detecta `render.yaml` automáticamente.
-   (O **New → Web Service** con runtime Docker, mismo resultado.)
+   `lince` — detecta `render.yaml` automáticamente.
 2. Variables de entorno:
    - `DATABASE_URL` → la URI de Supabase del paso 1.
-   - `WF_CORS_ORIGINS` → la URL de Vercel del paso 3 (puedes añadirla después).
-   - `WF_MODEL` → `small` con 2 GB de RAM; `base` si usas la instancia free
+   - `LINCE_CORS_ORIGINS` → la URL de Vercel del paso 3 (puedes añadirla después).
+   - `LINCE_MODEL` → `small` con 2 GB de RAM; `base` si usas la instancia free
      de 512 MB (el modelo `small` no cabe).
 3. El primer arranque tarda unos minutos (descarga el modelo). Comprueba
    `https://<tu-servicio>.onrender.com/api/health`.
+4. **Regístrate tú primero**: la primera cuenta creada es el administrador.
+
+> Las imágenes de la pizarra se guardan en disco del contenedor; en Render
+> añade un **Persistent Disk** montado en `/app/data` si quieres que
+> sobrevivan a los redeploys (la base de datos ya vive en Supabase).
 
 ## 3. Vercel (frontend)
 
@@ -35,19 +40,32 @@ Arquitectura: **Vercel** sirve el frontend estático (`server/static/`),
    `vercel.json` ya indica que se sirva `server/static/` sin build.
 2. Edita `server/static/config.js` y apunta al backend:
    ```js
-   window.WF_API_BASE = "https://<tu-servicio>.onrender.com";
+   window.LINCE_API_BASE = "https://<tu-servicio>.onrender.com";
    ```
    Commit + push: Vercel redespliega solo.
-3. Vuelve a Render y pon `WF_CORS_ORIGINS=https://<tu-proyecto>.vercel.app`.
+3. Vuelve a Render y pon `LINCE_CORS_ORIGINS=https://<tu-proyecto>.vercel.app`.
 
-Listo: comparte la URL de Vercel con tu equipo. Micrófono funciona porque
-ambas plataformas sirven HTTPS.
+Listo: comparte la URL de Vercel con tu equipo. Cada compañero crea su cuenta
+desde su máquina y **queda en espera hasta que tú lo apruebes** en la vista
+Equipo. El micrófono funciona porque ambas plataformas sirven HTTPS.
+
+## Conectar n8n
+
+1. En Lince Teams → **Transcripciones → Acceso por API**, crea un token.
+2. En n8n, nodo **HTTP Request**:
+   - Method: `POST` — URL: `https://<tu-servicio>.onrender.com/api/transcribe`
+   - Authentication: none; añade Header `Authorization` = `Bearer <token>`
+   - Body Content Type: `Form-Data`; campo tipo *Binary* llamado `audio`
+3. La respuesta trae `text`, `language` y `duration` para usar en el flujo.
+
+Los tokens se revocan desde la misma pantalla; revocar el acceso de un
+miembro (vista Equipo) invalida también todos sus tokens.
 
 ## Alternativa todo-en-uno (sin Vercel)
 
-El backend ya sirve el frontend él solo. Si prefieres una sola pieza:
-despliega solo Render (con o sin Supabase) y comparte la URL de Render.
-`config.js` con `WF_API_BASE = ""` funciona sin tocar nada.
+El backend ya sirve el frontend él solo: despliega solo Render (con o sin
+Supabase) y comparte la URL de Render. `config.js` con `LINCE_API_BASE = ""`
+funciona sin tocar nada.
 
 ## Desarrollo local
 

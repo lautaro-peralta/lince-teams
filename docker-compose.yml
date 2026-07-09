@@ -1,10 +1,10 @@
 services:
-  whisperflow-teams:
+  lince-teams:
     build: .
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data              # base de datos SQLite
+      - ./data:/app/data              # base de datos SQLite y archivos de la pizarra
       - hf-cache:/root/.cache/huggingface  # modelo Whisper (se descarga una vez)
     restart: unless-stopped
 

@@ -1,4 +1,4 @@
-"""Entry point: `python -m whisperflow` to run, `--check` for diagnostics."""
+"""Entry point: `python -m lince` to run, `--check` for diagnostics."""
 
 import argparse
 import sys
@@ -52,8 +52,8 @@ def check() -> int:
         import pyperclip
 
         old = pyperclip.paste()
-        pyperclip.copy("whisperflow-check")
-        assert pyperclip.paste() == "whisperflow-check"
+        pyperclip.copy("lince-check")
+        assert pyperclip.paste() == "lince-check"
         pyperclip.copy(old)
         print("      [+] Clipboard round-trip OK.")
     except Exception as e:
@@ -66,7 +66,7 @@ def check() -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="whisperflow", description="Private, fully local dictation."
+        prog="lince", description="Lince Dictado — private, fully local dictation."
     )
     parser.add_argument(
         "--check", action="store_true",

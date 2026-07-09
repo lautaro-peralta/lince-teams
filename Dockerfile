@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements-server.txt .
 RUN pip install --no-cache-dir -r requirements-server.txt
 
-COPY whisperflow/ whisperflow/
+COPY lince/ lince/
 COPY server/ server/
 
 EXPOSE 8000

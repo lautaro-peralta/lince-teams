@@ -3,58 +3,61 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WhisperFlow Teams</title>
+<title>Lince Teams</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Source+Sans+3:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23191714'/><text x='16' y='23' font-family='Georgia' font-size='20' fill='%23f7f4ee' text-anchor='middle'>W</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231B2B23'/><text x='16' y='23' font-family='Georgia' font-size='19' fill='%23F7F5F0' text-anchor='middle'>L</text></svg>">
 </head>
 <body>
 
 <div id="auth-screen" class="auth-screen hidden">
-  <div class="auth-card">
+  <div class="auth-card card-featured">
     <div class="auth-mast">
-      <div class="auth-brand">WhisperFlow <em>Teams</em></div>
-      <div class="rule-double"></div>
+      <div class="auth-brand">Lince <em>Teams</em></div>
       <div class="auth-tagline">GESTIÓN DE EQUIPO · TRANSCRIPCIÓN DE VOZ · EN VUESTRO SERVIDOR</div>
     </div>
-    <div class="auth-tabs">
-      <button id="tab-login" class="tab active">Iniciar sesión</button>
-      <span class="tab-sep">/</span>
-      <button id="tab-register" class="tab">Crear cuenta</button>
-    </div>
+    <nav class="tabs" role="tablist">
+      <button id="tab-login" class="tab active" role="tab" aria-selected="true">Iniciar sesión</button>
+      <button id="tab-register" class="tab" role="tab" aria-selected="false">Crear cuenta</button>
+    </nav>
     <form id="auth-form">
       <div id="field-display" class="field hidden">
-        <label>NOMBRE PARA MOSTRAR</label>
-        <input id="in-display" type="text" placeholder="Lautaro" autocomplete="name">
+        <label class="field-label" for="in-display">Nombre para mostrar</label>
+        <input id="in-display" class="field-input" type="text" placeholder="Lautaro" autocomplete="name">
       </div>
       <div class="field">
-        <label>USUARIO</label>
-        <input id="in-username" type="text" placeholder="lau" required autocomplete="username">
+        <label class="field-label" for="in-username">Usuario</label>
+        <input id="in-username" class="field-input" type="text" placeholder="lau" required autocomplete="username">
       </div>
       <div class="field">
-        <label>CONTRASEÑA</label>
-        <input id="in-password" type="password" placeholder="········" required autocomplete="current-password">
+        <label class="field-label" for="in-password">Contraseña</label>
+        <input id="in-password" class="field-input" type="password" placeholder="········" required autocomplete="current-password">
       </div>
-      <p id="auth-error" class="auth-error"></p>
-      <button type="submit" class="btn btn-primary btn-block" id="auth-submit">Entrar</button>
+      <p id="auth-error" class="field-error"></p>
+      <p id="auth-notice" class="auth-notice"></p>
+      <button type="submit" class="btn-primary btn-block" id="auth-submit">Entrar</button>
     </form>
   </div>
 </div>
 
 <div id="app" class="app hidden">
   <header class="masthead">
-    <div class="brand">WhisperFlow <em>Teams</em></div>
-    <nav class="mast-nav">
-      <button class="nav-item active" data-view="dashboard">Panel</button>
-      <button class="nav-item" data-view="board">Tablero</button>
-      <button class="nav-item" data-view="transcripts">Transcripciones</button>
+    <div class="brand">Lince <em>Teams</em></div>
+    <nav class="tabs mast-nav" role="tablist">
+      <button class="tab nav-item active" role="tab" data-view="dashboard">Panel</button>
+      <button class="tab nav-item" role="tab" data-view="board">Tablero</button>
+      <button class="tab nav-item" role="tab" data-view="whiteboard">Pizarra</button>
+      <button class="tab nav-item" role="tab" data-view="transcripts">Transcripciones</button>
+      <button class="tab nav-item hidden" role="tab" data-view="team" id="nav-team">Equipo</button>
     </nav>
     <div class="mast-user">
       <span id="me-avatar" class="avatar"></span>
       <span id="me-name" class="user-name"></span>
-      <button id="btn-logout" class="btn btn-small">Salir</button>
+      <button id="btn-logout" class="btn-ghost btn-small">Salir</button>
     </div>
   </header>
-  <div class="rule-double rule-page"></div>
   <main id="main" class="main"></main>
 </div>
 

@@ -1,6 +1,6 @@
 """Storage layer with two interchangeable backends:
 
-- SQLite (default): zero-config local file in data/whisperflow.db.
+- SQLite (default): zero-config local file in data/lince.db.
 - Postgres (e.g. Supabase): set DATABASE_URL and it's used instead.
 
 Queries are written once with `?` placeholders; they're translated to
@@ -18,7 +18,19 @@ if IS_PG:
     import psycopg
     from psycopg.rows import dict_row
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "whisperflow.db"
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "lince.db"
+UPLOADS_DIR = DB_PATH.parent / "uploads"
+
+# Renames from earlier versions of the app keep the user's data.
+if not IS_PG and not DB_PATH.exists():
+    for _legacy_name in ("tinta.db", "whisperflow.db"):
+        _legacy = DB_PATH.with_name(_legacy_name)
+        if _legacy.exists():
+            try:
+                _legacy.rename(DB_PATH)
+            except OSError:
+                DB_PATH = _legacy  # archivo en uso; seguimos usándolo donde está
+            break
 
 # Dialect-specific SQL fragment for "current UTC timestamp".
 NOW = "now()" if IS_PG else "datetime('now')"
@@ -33,11 +45,21 @@ CREATE TABLE IF NOT EXISTS users(
   display_name TEXT NOT NULL,
   salt TEXT NOT NULL,
   password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'member',
+  status TEXT NOT NULL DEFAULT 'pending',
   created_at {_TS}
 );
 CREATE TABLE IF NOT EXISTS sessions(
   token TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at {_TS}
+);
+CREATE TABLE IF NOT EXISTS api_tokens(
+  id {_ID},
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  token_hash TEXT UNIQUE NOT NULL,
   created_at {_TS}
 );
 CREATE TABLE IF NOT EXISTS tasks(
@@ -66,6 +88,19 @@ CREATE TABLE IF NOT EXISTS activity(
   text TEXT NOT NULL,
   created_at {_TS}
 );
+CREATE TABLE IF NOT EXISTS board_items(
+  id {_ID},
+  kind TEXT NOT NULL,
+  x REAL NOT NULL DEFAULT 0,
+  y REAL NOT NULL DEFAULT 0,
+  w REAL,
+  h REAL,
+  z INTEGER NOT NULL DEFAULT 0,
+  color TEXT,
+  content TEXT DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at {_TS}
+);
 """
 
 
@@ -83,11 +118,40 @@ def connect():
     return conn
 
 
+def _migrate(conn) -> None:
+    """Upgrade databases created before roles/approval existed."""
+    if IS_PG:
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member'")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'")
+        fresh_columns = False
+    else:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        fresh_columns = "role" not in cols
+        if fresh_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'")
+            conn.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+
+    if fresh_columns:
+        # Existing accounts predate the approval flow: keep them working.
+        conn.execute("UPDATE users SET status = 'active'")
+
+    # There must always be at least one admin: promote the oldest account.
+    row = conn.execute("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").fetchone()
+    n_admins = row["n"] if isinstance(row, dict) or hasattr(row, "keys") else row[0]
+    if n_admins == 0:
+        conn.execute(
+            "UPDATE users SET role = 'admin', status = 'active' "
+            "WHERE id = (SELECT MIN(id) FROM users)"
+        )
+
+
 def init() -> None:
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     statements = [s.strip() for s in SCHEMA.split(";") if s.strip()]
     with connect() as conn:
         for stmt in statements:
             conn.execute(stmt)
+        _migrate(conn)
 
 
 def query_all(sql: str, params: tuple = ()) -> list[dict]:

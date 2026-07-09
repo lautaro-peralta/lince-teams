@@ -3,7 +3,7 @@
  * Si el backend (FastAPI) vive en otra URL — por ejemplo cuando el frontend
  * se sirve desde Vercel y la API desde Render — pon aquí la URL base:
  *
- *   window.WF_API_BASE = "https://whisperflow-teams.onrender.com";
+ *   window.LINCE_API_BASE = "https://lince-teams.onrender.com";
  *
  * Vacío = mismo origen (el propio servidor FastAPI sirve esta página). */
-window.WF_API_BASE = "";
+window.LINCE_API_BASE = "";
