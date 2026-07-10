@@ -142,14 +142,16 @@ Probá: `https://teams-origin.TU-DOMINIO.com/api/health`.
 
 En el repo de **Lince Automate**, en `deploy/teams-proxy/`:
 
-1. `wrangler.jsonc` → `TEAMS_ORIGIN=https://teams-origin.TU-DOMINIO.com`.
-2. En la VM, agregá `LINCE_API_BASE=/teams` a `/etc/lince-teams/teams.env` y
+1. **En la VM**, agregá `LINCE_API_BASE=/teams` a `/etc/lince-teams/teams.env` y
    `sudo systemctl restart lince-teams`. (El server sirve `config.js` dinámico
    desde esa variable — NO hace falta editar el archivo estático, así el
    `git pull` no pisa nada.)
-3. Desplegá el Worker: `wrangler deploy` desde `deploy/teams-proxy/`, o por el
-   dashboard de Cloudflare (Worker + variable `TEAMS_ORIGIN` + route
-   `TU-DOMINIO/teams/*`).
+2. **En el sitio (repo Lince Automate)**, el proxy vive en
+   `web/src/hooks.server.ts` (reenvía `/teams/*` a `TEAMS_ORIGIN`). Como el sitio
+   corre como Worker en un custom domain, un Worker aparte en una route **no**
+   intercepta; por eso va en el hook del sitio. Seteá la variable
+   `TEAMS_ORIGIN=https://teams-origin.TU-DOMINIO.com` (el hostname del túnel) en
+   `web/wrangler.jsonc` o en el dashboard del Worker, y **redesplegá el sitio**.
 
 Verificación final: entrá al panel `TU-DOMINIO.com/admin`, luego abrí
 `TU-DOMINIO.com/teams` → debería entrar **sin** volver a loguear. La pizarra debe
