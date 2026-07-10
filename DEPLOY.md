@@ -9,6 +9,11 @@ transcripciones.
 > nubes (bajo tus cuentas). Para mantenerlo 100% en tu infraestructura, usa
 > `docker compose up -d` en un servidor propio — el código es el mismo.
 
+> **¿Querés unificarlo con Lince Automate (un solo login)?** Lince Teams puede
+> compartir el login del panel de Lince en vez de tener cuentas propias. Es un
+> modo opcional que se activa por variables de entorno; ver
+> [Modo unificado](#modo-unificado-un-solo-login-con-lince-automate) al final.
+
 ## 1. Supabase (base de datos)
 
 1. Crea un proyecto en [supabase.com](https://supabase.com) (plan free sirve).
@@ -71,3 +76,60 @@ funciona sin tocar nada.
 
 `run_server.bat` → http://localhost:8000 (SQLite, sin variables de entorno).
 Con `DATABASE_URL` definida localmente, usa Supabase también en local.
+
+## Modo unificado: un solo login con Lince Automate
+
+Por defecto Lince Teams tiene su propio registro/aprobación de cuentas. Si ya
+usás **Lince Automate** (el panel + Startup OS, sobre Supabase), podés hacer que
+Teams **comparta ese mismo login** en vez de mantener dos padrones.
+
+### Cómo funciona
+
+- El navegador manda el **JWT de Supabase** (la misma sesión del panel `/admin`).
+  El backend lo valida contra Supabase Auth y **espeja** la cuenta en su tabla
+  local `users` por `auth_id`, leyendo rol y nombre de `public.profiles`.
+- Los **miembros** son los `profiles` con rol `admin` o `socio` (los mismos del
+  panel y el Startup OS). No hay registro ni aprobación acá: se gestionan en el
+  panel de Lince. La pestaña **Equipo** se oculta.
+- Las **transcripciones** y el **tiempo real** (WebSocket) siguen igual: son la
+  razón de tener este servicio Python.
+
+### Variables de entorno (en Render)
+
+Además de `DATABASE_URL` (que debe apuntar al **mismo** Postgres de Supabase que
+usa Lince Automate, para compartir `profiles`):
+
+| Variable | Valor |
+|----------|-------|
+| `SUPABASE_URL` | `https://TU-PROYECTO.supabase.co` |
+| `SUPABASE_ANON_KEY` | la anon key pública del proyecto |
+| `LINCE_LOGIN_URL` | a dónde mandar a iniciar sesión (por defecto `/admin`) |
+
+Con esas dos primeras presentes, el modo unificado se activa solo (lo confirma
+`GET /api/config` → `{"supabase": true, …}`). Si faltan, Teams sigue en modo
+standalone con su login propio.
+
+### SSO real: servir Teams en el mismo origen
+
+La sesión de Supabase vive en el `localStorage` del navegador, que es **por
+origen**. Para que Teams reutilice la sesión del panel **sin volver a loguear**,
+servilo en el **mismo dominio** que Lince Automate, bajo una ruta (p. ej.
+`https://lince-automate.com/teams`), con un reverse-proxy hacia el servicio de
+Render. En Cloudflare (donde ya vive el frontend) alcanza con una regla que
+enrute `/teams/*`, `/api/*` de Teams y el `/ws` (upgrade de WebSocket) al
+servicio Python.
+
+- Sin sesión, Teams redirige a `LINCE_LOGIN_URL` (`/admin`) con `?next=/teams/`,
+  y el panel lo trae de vuelta al iniciar sesión (ese redirect ya está soportado
+  en el panel para `/teams`).
+- **Alternativa por subdominio** (`teams.lince-automate.com`): funciona con las
+  mismas cuentas, pero al ser otro origen el usuario inicia sesión una segunda
+  vez en Teams (Supabase reconoce el mismo proyecto). Poné `LINCE_LOGIN_URL` con
+  la URL completa del panel si elegís este camino.
+
+### En Supabase
+
+No hace falta esquema nuevo para Teams: sus tablas (`users`, `tasks`,
+`board_items`, etc.) las crea el backend al arrancar, y `profiles` ya existe por
+Lince Automate. Solo asegurate de que las cuentas del equipo tengan rol `admin`
+o `socio` (se hace desde el panel / SQL Editor, igual que para el Startup OS).

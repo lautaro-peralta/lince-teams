@@ -14,3 +14,13 @@ services:
         value: small
       - key: LINCE_COMPUTE_TYPE
         value: int8
+      # ── Modo unificado (opcional): comparte el login del panel de Lince ──────
+      # Si se definen, el frontend usa el JWT de Supabase (mismo del panel) y se
+      # desactivan el registro/login propios. DATABASE_URL debe apuntar al MISMO
+      # Postgres de Supabase que usa Lince Automate (para leer public.profiles).
+      - key: SUPABASE_URL        # https://TU-PROYECTO.supabase.co
+        sync: false
+      - key: SUPABASE_ANON_KEY   # anon public key (valor público)
+        sync: false
+      - key: LINCE_LOGIN_URL     # a dónde mandar a iniciar sesión (por defecto /admin)
+        value: /admin

@@ -47,6 +47,14 @@ run_server.bat    # http://localhost:8000
 
 El primer usuario registrado se convierte en administrador automáticamente.
 
+> **Login unificado con Lince Automate (opcional).** Si ya usás el panel de
+> Lince (sobre Supabase), Teams puede **compartir ese mismo login** en vez de
+> tener cuentas propias: el navegador usa el JWT de Supabase y los miembros son
+> los `profiles` con rol `admin`/`socio`. Se activa con `SUPABASE_URL` +
+> `SUPABASE_ANON_KEY` en el entorno (el registro/aprobación propios se
+> desactivan y la pestaña Equipo se oculta). Transcripciones y tiempo real
+> siguen igual. Guía en [DEPLOY.md](DEPLOY.md#modo-unificado-un-solo-login-con-lince-automate).
+
 ### API de transcripción (n8n, scripts)
 
 Cada miembro aprobado puede crear **tokens de API** (`lince_…`) desde la vista
@@ -71,6 +79,9 @@ equipo aprobado puede usar el servicio.
 - **Docker:** `docker compose up -d --build` en cualquier VPS.
 - **Nube (Supabase + Render + Vercel):** guía paso a paso en [DEPLOY.md](DEPLOY.md).
   Con `DATABASE_URL` el backend pasa de SQLite a Postgres automáticamente.
+- **Oracle Cloud (Always Free, con Whisper + WebSocket):** guía en
+  [`deploy/DEPLOY-oracle.md`](deploy/DEPLOY-oracle.md) — la VM no se duerme y la
+  A1 (ARM) tiene RAM de sobra para el modelo; ideal para el modo unificado.
 
 ## Privacidad
 

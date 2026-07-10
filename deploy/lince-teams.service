@@ -1,0 +1,32 @@
+# Servicio systemd para Lince Teams (FastAPI + Whisper).
+# Instalar en la VM de Oracle Cloud:
+#   sudo cp /opt/lince-teams/deploy/lince-teams.service /etc/systemd/system/lince-teams.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now lince-teams
+#   sudo systemctl status lince-teams     # ver estado
+#   journalctl -u lince-teams -f          # ver logs en vivo
+#
+# Las variables (DATABASE_URL, SUPABASE_URL, SUPABASE_ANON_KEY, LINCE_MODEL…) se
+# leen de /etc/lince-teams/teams.env — NO las pongas en el repo (traen secretos).
+# Copiá la plantilla del repo: sudo cp .env.example /etc/lince-teams/teams.env
+
+[Unit]
+Description=Lince Teams (FastAPI + Whisper)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/lince-teams
+EnvironmentFile=/etc/lince-teams/teams.env
+# UN SOLO worker a propósito: el hub del WebSocket (tiempo real de la pizarra) y
+# el modelo Whisper viven en memoria del proceso. Varios workers romperían el
+# broadcast entre clientes y duplicarían el modelo en RAM.
+ExecStart=/opt/lince-teams/.venv/bin/uvicorn server.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+# La primera vez el arranque descarga el modelo (~460 MB para "small"): sin tope.
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

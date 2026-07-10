@@ -120,7 +120,22 @@ def current_user(authorization: str | None = Header(default=None)) -> dict:
     token = None
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization[7:]
-    user = auth.user_for_token(token)
+    if not token:
+        raise HTTPException(401, "No autorizado")
+
+    if token.startswith(auth.API_TOKEN_PREFIX):
+        user = auth.user_for_api_token(token)
+    elif auth.SUPABASE_MODE:
+        # Login unificado: el token es un JWT de Supabase (mismo del panel).
+        au = auth.supabase_user(token)
+        if not au:
+            raise HTTPException(401, "Sesión inválida o expirada.")
+        user = auth.provision_member(au)
+        if not user:
+            raise HTTPException(403, "Tu cuenta no tiene acceso a Lince Teams.")
+    else:
+        user = auth.user_for_session(token)
+
     if not user:
         raise HTTPException(401, "No autorizado")
     if user["status"] != "active":
@@ -140,8 +155,15 @@ class Credentials(BaseModel):
     display_name: str | None = None
 
 
+def _reject_local_auth() -> None:
+    """En modo unificado no hay registro/login propios: se usa el del panel."""
+    if auth.SUPABASE_MODE:
+        raise HTTPException(403, "El acceso se gestiona desde el panel de Lince.")
+
+
 @app.post("/api/register")
 def register(body: Credentials):
+    _reject_local_auth()
     username = body.username.strip().lower()
     if len(username) < 2 or len(body.password) < 6:
         raise HTTPException(400, "Usuario mínimo 2 caracteres y contraseña mínimo 6.")
@@ -176,6 +198,7 @@ def register(body: Credentials):
 
 @app.post("/api/login")
 def login(body: Credentials):
+    _reject_local_auth()
     row = db.query_one(
         "SELECT * FROM users WHERE username = ?", (body.username.strip().lower(),)
     )
@@ -204,6 +227,7 @@ def me(user: dict = Depends(current_user)):
 
 @app.get("/api/users")
 def users(user: dict = Depends(current_user)):
+    auth.sync_members()  # modo unificado: refleja a todos los socios/admins de Supabase
     return db.query_all(
         """SELECT id, username, display_name FROM users
            WHERE status = 'active' ORDER BY display_name"""
@@ -214,6 +238,7 @@ def users(user: dict = Depends(current_user)):
 
 @app.get("/api/admin/members")
 def admin_members(admin: dict = Depends(current_admin)):
+    auth.sync_members()  # modo unificado: trae a los socios/admins aunque no hayan entrado
     return db.query_all(
         """SELECT id, username, display_name, role, status, created_at
            FROM users ORDER BY status DESC, created_at"""
@@ -228,6 +253,8 @@ class MemberPatch(BaseModel):
 @app.patch("/api/admin/members/{member_id}")
 def admin_update_member(member_id: int, body: MemberPatch,
                         admin: dict = Depends(current_admin)):
+    if auth.SUPABASE_MODE:
+        raise HTTPException(403, "Gestioná miembros y roles desde el panel de Lince (Supabase).")
     member = db.query_one("SELECT * FROM users WHERE id = ?", (member_id,))
     if not member:
         raise HTTPException(404, "Miembro no encontrado.")
@@ -259,6 +286,8 @@ def admin_update_member(member_id: int, body: MemberPatch,
 
 @app.delete("/api/admin/members/{member_id}")
 def admin_delete_member(member_id: int, admin: dict = Depends(current_admin)):
+    if auth.SUPABASE_MODE:
+        raise HTTPException(403, "Gestioná las cuentas desde el panel de Lince (Supabase).")
     if member_id == admin["id"]:
         raise HTTPException(400, "No puedes eliminarte a ti mismo.")
     member = db.query_one("SELECT * FROM users WHERE id = ?", (member_id,))
@@ -623,6 +652,24 @@ def dashboard(user: dict = Depends(current_user)):
 @app.get("/api/health")
 def health():
     return {"ok": True, "model_loaded": _transcriber is not None}
+
+
+@app.get("/api/config")
+def public_config():
+    """Config pública para el frontend (sin auth). En modo unificado devuelve la
+    URL + anon key de Supabase (valores públicos) para que el navegador use la
+    MISMA sesión que el panel; en standalone, `supabase: false` y el frontend
+    muestra su login propio."""
+    if not auth.SUPABASE_MODE:
+        return {"supabase": False}
+    return {
+        "supabase": True,
+        "supabaseUrl": auth.SUPABASE_URL,
+        "supabaseAnonKey": auth.SUPABASE_ANON_KEY,
+        # A dónde mandar a iniciar sesión cuando no hay sesión. En un despliegue
+        # unificado (mismo origen, /teams tras el panel) alcanza con /admin.
+        "loginUrl": os.environ.get("LINCE_LOGIN_URL", "/admin"),
+    }
 
 
 # -- websocket ---------------------------------------------------------------------
