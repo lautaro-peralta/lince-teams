@@ -3,6 +3,18 @@ services:
     build: .
     ports:
       - "8000:8000"
+    # Variables tomadas del .env de esta carpeta (Compose lo lee solo). Si no
+    # existe, quedan vacías → modo standalone con SQLite. Copiá .env.example a
+    # .env para el modo unificado / Postgres.
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
+      LINCE_LOGIN_URL: ${LINCE_LOGIN_URL:-/admin}
+      LINCE_MODEL: ${LINCE_MODEL:-small}
+      LINCE_DEVICE: ${LINCE_DEVICE:-auto}
+      LINCE_COMPUTE_TYPE: ${LINCE_COMPUTE_TYPE:-int8}
+      LINCE_CORS_ORIGINS: ${LINCE_CORS_ORIGINS:-}
     volumes:
       - ./data:/app/data              # base de datos SQLite y archivos de la pizarra
       - hf-cache:/root/.cache/huggingface  # modelo Whisper (se descarga una vez)

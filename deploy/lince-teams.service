@@ -8,7 +8,7 @@
 #
 # Las variables (DATABASE_URL, SUPABASE_URL, SUPABASE_ANON_KEY, LINCE_MODEL…) se
 # leen de /etc/lince-teams/teams.env — NO las pongas en el repo (traen secretos).
-# Copiá la plantilla: sudo cp deploy/teams.env.example /etc/lince-teams/teams.env
+# Copiá la plantilla del repo: sudo cp .env.example /etc/lince-teams/teams.env
 
 [Unit]
 Description=Lince Teams (FastAPI + Whisper)

@@ -75,7 +75,7 @@ python3 -m venv .venv
 
 ```bash
 sudo mkdir -p /etc/lince-teams
-sudo cp /opt/lince-teams/deploy/teams.env.example /etc/lince-teams/teams.env
+sudo cp /opt/lince-teams/.env.example /etc/lince-teams/teams.env
 sudo nano /etc/lince-teams/teams.env
 ```
 
