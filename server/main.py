@@ -19,6 +19,7 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
+    Response,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -670,6 +671,18 @@ def public_config():
         # unificado (mismo origen, /teams tras el panel) alcanza con /admin.
         "loginUrl": os.environ.get("LINCE_LOGIN_URL", "/admin"),
     }
+
+
+@app.get("/config.js")
+def config_js():
+    """Sirve config.js de forma DINÁMICA a partir de la variable LINCE_API_BASE,
+    para no tener que editar el archivo estático (que es trackeado por git y se
+    pisaría en cada `git pull`). Tras el reverse-proxy same-origin se setea
+    LINCE_API_BASE=/teams en el entorno; vacío = mismo origen (standalone).
+    Esta ruta va antes del `mount("/")`, así que gana sobre el archivo estático."""
+    base = os.environ.get("LINCE_API_BASE", "")
+    body = f"window.LINCE_API_BASE = {json.dumps(base)};\n"
+    return Response(body, media_type="application/javascript")
 
 
 # -- websocket ---------------------------------------------------------------------
