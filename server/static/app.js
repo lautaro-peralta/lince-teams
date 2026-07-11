@@ -171,6 +171,10 @@ async function enterApp() {
   // En modo unificado los miembros y roles se gestionan en el panel de Lince,
   // así que la pestaña Equipo (aprobación/roles locales) no aplica.
   $("#nav-team").classList.toggle("hidden", state.me.role !== "admin" || !!state.supabase);
+  // Enlaces a las otras herramientas del ecosistema (Panel /admin, Startup OS
+  // /startup-os/): solo tienen sentido en el despliegue unificado (mismo origen
+  // tras el panel). En standalone no existen, así que se ocultan.
+  $("#mast-apps").classList.toggle("hidden", !state.supabase);
   connectWs();
   showView(state.view);
 }
@@ -201,12 +205,20 @@ function showView(view) {
     b.classList.toggle("active", b.dataset.view === view);
     b.setAttribute("aria-selected", b.dataset.view === view);
   });
-  // Al cambiar de vista mostramos el indicador de carga de inmediato: así la
-  // pizarra (o cualquier vista) no queda "trabada" mostrando la vista anterior
-  // mientras se piden los datos. En refrescos de la misma vista (p. ej. avisos
-  // por WebSocket) no parpadea, porque solo entra si cambió o si #main está vacío.
-  if (changed || !$("#main").innerHTML.trim()) renderLoading();
-  Promise.resolve(VIEWS[view]()).catch(err => {
+  // Spinner DIFERIDO: solo aparece si la carga se demora (>250 ms). Así las
+  // cargas rápidas (la mayoría) no parpadean, y el indicador aparece únicamente
+  // cuando el usuario de verdad necesita saber que algo está cargando. Se cancela
+  // en cuanto la vista termina de pintar, y no se programa en refrescos de la
+  // misma vista (p. ej. avisos por WebSocket).
+  let spinnerTimer = null;
+  if (changed || !$("#main").innerHTML.trim()) {
+    spinnerTimer = setTimeout(() => {
+      if (state.view === view) renderLoading();
+    }, 250);
+  }
+  const clearSpinner = () => { if (spinnerTimer) clearTimeout(spinnerTimer); };
+  Promise.resolve(VIEWS[view]()).then(clearSpinner, err => {
+    clearSpinner();
     if (state.view === view) {
       $("#main").innerHTML =
         `<div class="view"><div class="panel-card empty">No se pudo cargar la vista: ${esc(err.message)}</div></div>`;
