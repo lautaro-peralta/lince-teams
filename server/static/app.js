@@ -183,8 +183,17 @@ const VIEWS = {
   team: renderTeam,
 };
 
+function renderLoading() {
+  $("#main").innerHTML = `
+    <div class="loading" role="status" aria-live="polite">
+      <div class="spinner"></div>
+      <span class="loading-label">Cargando…</span>
+    </div>`;
+}
+
 function showView(view) {
   if (view === "team" && (state.me.role !== "admin" || state.supabase)) view = "dashboard";
+  const changed = state.view !== view;
   if (state.view === "whiteboard" && view !== "whiteboard") state.wb = null;
   state.view = view;
   document.body.classList.toggle("wb-active", view === "whiteboard");
@@ -192,7 +201,17 @@ function showView(view) {
     b.classList.toggle("active", b.dataset.view === view);
     b.setAttribute("aria-selected", b.dataset.view === view);
   });
-  VIEWS[view]();
+  // Al cambiar de vista mostramos el indicador de carga de inmediato: así la
+  // pizarra (o cualquier vista) no queda "trabada" mostrando la vista anterior
+  // mientras se piden los datos. En refrescos de la misma vista (p. ej. avisos
+  // por WebSocket) no parpadea, porque solo entra si cambió o si #main está vacío.
+  if (changed || !$("#main").innerHTML.trim()) renderLoading();
+  Promise.resolve(VIEWS[view]()).catch(err => {
+    if (state.view === view) {
+      $("#main").innerHTML =
+        `<div class="view"><div class="panel-card empty">No se pudo cargar la vista: ${esc(err.message)}</div></div>`;
+    }
+  });
 }
 
 async function connectWs() {
@@ -548,7 +567,7 @@ const WB_TOOLS = [
   { mode: "text",    label: "Texto",       key: "T", icon: '<polyline points="5 7 5 5 19 5 19 7"/><line x1="12" y1="5" x2="12" y2="19"/><line x1="9" y1="19" x2="15" y2="19"/>' },
   { mode: "note",    label: "Nota",        key: "N", icon: '<path d="M5 4h9l5 5v11H5z"/><polyline points="14 4 14 9 19 9"/>' },
   { mode: "image",   label: "Imagen",      key: "I", icon: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.6"/><polyline points="21 15 16 10 5 21"/>' },
-  { mode: "erase",   label: "Borrador",    key: "E", icon: '<path d="M8 20H4v-4L14 6l4 4-8 8z"/><path d="M13.5 6.5l4 4"/><line x1="8" y1="20" x2="21" y2="20"/>' },
+  { mode: "erase",   label: "Borrador",    key: "E", icon: '<path d="M7 21l-4.3-4.3a2 2 0 0 1 0-2.8l9.6-9.6a2 2 0 0 1 2.8 0l5.6 5.6a2 2 0 0 1 0 2.8L13 21"/><line x1="22" y1="21" x2="7" y2="21"/><line x1="5" y1="11" x2="14" y2="20"/>' },
 ];
 const WB_SHAPES = new Set(["rect", "ellipse", "line", "arrow"]);
 const WB_DRAW = new Set(["pen", "marker", "rect", "ellipse", "line", "arrow"]);

@@ -261,7 +261,10 @@ body.wb-active { overflow: hidden; }
 body.wb-active .app { height: 100vh; height: 100dvh; min-height: 0; }
 body.wb-active .main { max-width: none; padding: 0; height: 100%; min-height: 0; overflow: hidden; }
 
-.wb-screen { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
+.wb-screen {
+  position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bg);
+  animation: fade-in .25s var(--ease-out-expo);
+}
 .wb-wrap { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; }
 .wb-canvas {
   position: relative; width: 2400px; height: 1600px;
@@ -473,6 +476,25 @@ body.wb-active .main { max-width: none; padding: 0; height: 100%; min-height: 0;
 .toast.error { border-left-color: var(--error); color: var(--error); }
 .toast.ok { border-left-color: var(--moss); }
 @keyframes toast-in { from { transform: translateY(10px); opacity: 0; } }
+
+/* ---- indicador de carga ---- */
+.loading {
+  display: grid; place-items: center; gap: 16px;
+  min-height: 45vh; padding: 60px 0;
+  animation: fade-in .2s var(--ease-out-expo);
+}
+body.wb-active .loading { height: 100%; min-height: 0; }
+.spinner {
+  width: 42px; height: 42px; border-radius: 50%;
+  border: 3px solid var(--line-strong); border-top-color: var(--rust);
+  animation: spin .7s linear infinite;
+}
+.loading-label {
+  font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--sage);
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fade-in { from { opacity: 0; } }
 
 /* ---- responsive / accesibilidad ---- */
 @media (max-width: 760px) {
