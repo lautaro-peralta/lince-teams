@@ -6,6 +6,7 @@ Run with: uvicorn server.main:app --host 0.0.0.0 --port 8000
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import tempfile
@@ -694,7 +695,9 @@ def config_js():
     Esta ruta va antes del `mount("/")`, así que gana sobre el archivo estático."""
     base = os.environ.get("LINCE_API_BASE", "")
     body = f"window.LINCE_API_BASE = {json.dumps(base)};\n"
-    return Response(body, media_type="application/javascript")
+    # Dinámico: no debe quedar cacheado (ni en el navegador ni en Cloudflare).
+    return Response(body, media_type="application/javascript",
+                    headers={"Cache-Control": "no-cache"})
 
 
 # -- websocket ---------------------------------------------------------------------
@@ -716,9 +719,41 @@ async def ws_endpoint(ws: WebSocket, token: str = ""):
 
 # -- static (mounted last so /api and /ws win) ---------------------------------------
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _asset_version() -> str:
+    """Hash corto del contenido de los estáticos que cambian entre deploys, para
+    "cache-bustear" app.js/style.css. Se calcula una vez al arrancar; como el
+    deploy reinicia el proceso, siempre refleja los archivos desplegados."""
+    h = hashlib.md5()
+    for name in ("app.js", "style.css"):
+        try:
+            h.update((STATIC_DIR / name).read_bytes())
+        except FileNotFoundError:
+            pass
+    return h.hexdigest()[:8]
+
+
+ASSET_VERSION = _asset_version()
+
+
+@app.get("/")
+@app.get("/index.html")
+def index():
+    """Sirve index.html con las URLs de los estáticos versionadas (?v=hash) y
+    Cache-Control: no-cache. Así, al cambiar app.js/style.css cambia su URL y el
+    navegador —y Cloudflare, que cachea .js/.css por extensión— piden la versión
+    nueva en vez de servir una vieja. Va antes del mount('/'), así que gana."""
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = html.replace('href="style.css"', f'href="style.css?v={ASSET_VERSION}"')
+    html = html.replace('src="app.js"', f'src="app.js?v={ASSET_VERSION}"')
+    return Response(
+        html,
+        media_type="text/html; charset=utf-8",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 app.mount("/uploads", StaticFiles(directory=db.UPLOADS_DIR), name="uploads")
-app.mount(
-    "/",
-    StaticFiles(directory=Path(__file__).resolve().parent / "static", html=True),
-    name="static",
-)
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
