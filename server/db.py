@@ -110,6 +110,16 @@ CREATE TABLE IF NOT EXISTS board_items(
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   updated_at {_TS}
 );
+CREATE TABLE IF NOT EXISTS integrations(
+  id {_ID},
+  provider TEXT NOT NULL,
+  name TEXT NOT NULL,
+  url TEXT DEFAULT '',
+  config TEXT DEFAULT '',
+  secret TEXT DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at {_TS}
+);
 """
 
 

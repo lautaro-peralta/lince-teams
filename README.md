@@ -41,6 +41,11 @@ run_server.bat    # http://localhost:8000
   mano alzada e imágenes. Todos los conectados ven los cambios al instante.
 - **Transcripciones** — graba desde el navegador; el audio se transcribe con
   el modelo local del servidor y queda compartido con el equipo.
+- **Integraciones** — las herramientas del equipo en un solo lugar: enlaces a
+  **Google Drive/Docs** (con vista previa incrustada), **repos de GitHub** con
+  sus issues y pull requests **en vivo** (importá un issue como tarea o creá un
+  issue desde una tarea, usando un token propio) y cualquier otra herramienta
+  por enlace. Las conexiones las gestiona un admin; todo el equipo las usa.
 - **Equipo** (admins) — control de acceso: cada registro nuevo queda
   **pendiente hasta que un administrador lo apruebe**; roles admin/miembro,
   revocación de acceso y eliminación de cuentas.
