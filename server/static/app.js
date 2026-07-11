@@ -187,6 +187,7 @@ function showView(view) {
   if (view === "team" && (state.me.role !== "admin" || state.supabase)) view = "dashboard";
   if (state.view === "whiteboard" && view !== "whiteboard") state.wb = null;
   state.view = view;
+  document.body.classList.toggle("wb-active", view === "whiteboard");
   $$(".nav-item").forEach(b => {
     b.classList.toggle("active", b.dataset.view === view);
     b.setAttribute("aria-selected", b.dataset.view === view);
@@ -511,170 +512,370 @@ function taskModal(task = null) {
   };
 }
 
+/* Diálogo de confirmación reutilizable para acciones destructivas. */
+function confirmModal({ title, body, confirm = "Confirmar", onConfirm }) {
+  $("#modal-root").innerHTML = `
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal modal-sm">
+      <h3>${esc(title)}</h3>
+      <p class="confirm-body">${esc(body)}</p>
+      <div class="modal-actions">
+        <div class="spacer"></div>
+        <button class="btn-ghost" id="c-cancel">Cancelar</button>
+        <button class="btn-ghost btn-danger" id="c-ok">${esc(confirm)}</button>
+      </div>
+    </div>
+  </div>`;
+  const close = () => ($("#modal-root").innerHTML = "");
+  $("#modal-overlay").onclick = e => { if (e.target.id === "modal-overlay") close(); };
+  $("#c-cancel").onclick = close;
+  $("#c-ok").onclick = async () => { close(); await onConfirm(); };
+}
+
 /* ---------- pizarra colaborativa ---------- */
+
+const SVGNS = "http://www.w3.org/2000/svg";
+
+// Herramientas de la pizarra: icono (SVG), etiqueta y atajo de teclado.
+const WB_TOOLS = [
+  { mode: "move",    label: "Seleccionar", key: "V", icon: '<path d="M5 3l6 15 2-6 6-2L5 3z"/>' },
+  { mode: "pen",     label: "Lápiz",       key: "P", icon: '<path d="M15.5 3.5l5 5L8 21H3v-5L15.5 3.5z"/><path d="M13.5 5.5l5 5"/>' },
+  { mode: "marker",  label: "Marcador",    key: "M", icon: '<path d="M4 20h5l9-9-5-5-9 9v5z"/><path d="M13 5l5 5"/><line x1="4" y1="20" x2="9" y2="20"/>' },
+  { mode: "rect",    label: "Rectángulo",  key: "R", icon: '<rect x="4" y="5" width="16" height="14" rx="1.5"/>' },
+  { mode: "ellipse", label: "Elipse",      key: "O", icon: '<circle cx="12" cy="12" r="8"/>' },
+  { mode: "line",    label: "Línea",       key: "L", icon: '<line x1="5" y1="19" x2="19" y2="5"/>' },
+  { mode: "arrow",   label: "Flecha",      key: "A", icon: '<line x1="5" y1="19" x2="19" y2="5"/><polyline points="10 5 19 5 19 14"/>' },
+  { mode: "text",    label: "Texto",       key: "T", icon: '<polyline points="5 7 5 5 19 5 19 7"/><line x1="12" y1="5" x2="12" y2="19"/><line x1="9" y1="19" x2="15" y2="19"/>' },
+  { mode: "note",    label: "Nota",        key: "N", icon: '<path d="M5 4h9l5 5v11H5z"/><polyline points="14 4 14 9 19 9"/>' },
+  { mode: "image",   label: "Imagen",      key: "I", icon: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.6"/><polyline points="21 15 16 10 5 21"/>' },
+  { mode: "erase",   label: "Borrador",    key: "E", icon: '<path d="M8 20H4v-4L14 6l4 4-8 8z"/><path d="M13.5 6.5l4 4"/><line x1="8" y1="20" x2="21" y2="20"/>' },
+];
+const WB_SHAPES = new Set(["rect", "ellipse", "line", "arrow"]);
+const WB_DRAW = new Set(["pen", "marker", "rect", "ellipse", "line", "arrow"]);
+const WB_PEN_SIZES = [2, 4, 7];
+const WB_MARKER_SIZES = [12, 20, 30];
+const WB_TEXT_SIZES = [16, 22, 32];
+const WB_ERASER_R = 16; // radio del borrador en px lógicos
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function svgIcon(paths) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ` +
+    `stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+}
 
 async function renderWhiteboard() {
   const seq = ++state.renderSeq;
   const items = await api("/board");
   if (seq !== state.renderSeq || state.view !== "whiteboard") return;
 
-  $("#main").innerHTML = `<div class="view">
-    <div class="view-head">
-      <div><h2>Pizarra</h2>
-      <div class="view-sub">Notas, dibujos e imágenes compartidos — todos ven los cambios al instante</div></div>
-    </div>
-    <div class="panel-card wb-toolbar">
-      <button class="wb-tool active" data-mode="move">Mover</button>
-      <button class="wb-tool" data-mode="note">Nota</button>
-      <button class="wb-tool" data-mode="draw">Dibujar</button>
-      <button class="wb-tool" data-mode="image">Imagen</button>
-      <button class="wb-tool" data-mode="erase">Borrar</button>
-      <span class="wb-sep"></span>
-      <span id="wb-swatches"></span>
-      <span class="wb-hint meta" id="wb-hint">Haz clic en una herramienta</span>
-      <input type="file" id="wb-file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden">
-    </div>
-    <div class="wb-wrap" id="wb-wrap">
-      <div class="wb-canvas mode-move" id="wb-canvas">
-        <svg id="wb-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+  $("#main").innerHTML = `
+    <div class="wb-screen">
+      <div class="wb-wrap" id="wb-wrap">
+        <div class="wb-canvas mode-move" id="wb-canvas">
+          <svg id="wb-svg" xmlns="${SVGNS}"></svg>
+        </div>
       </div>
-    </div>
-  </div>`;
 
-  state.wb = {
+      <div class="wb-toolbar" id="wb-toolbar" role="toolbar" aria-label="Herramientas de pizarra">
+        ${WB_TOOLS.map(t => `
+          <button class="wb-tool ${t.mode === "move" ? "active" : ""}" data-mode="${t.mode}"
+                  title="${t.label} · ${t.key}" aria-label="${t.label}">${svgIcon(t.icon)}</button>`).join("")}
+      </div>
+
+      <div class="wb-options hidden" id="wb-options">
+        <div class="wb-colors" id="wb-colors"></div>
+        <div class="wb-divider" id="wb-size-div"></div>
+        <div class="wb-sizes" id="wb-sizes"></div>
+      </div>
+
+      <div class="wb-actions">
+        <button class="wb-act" id="wb-undo" title="Deshacer · Ctrl+Z" aria-label="Deshacer">
+          ${svgIcon('<polyline points="9 14 4 9 9 4"/><path d="M20 20v-6a5 5 0 0 0-5-5H4"/>')}</button>
+        <button class="wb-act wb-act-danger" id="wb-clear" title="Limpiar toda la pizarra" aria-label="Limpiar todo">
+          ${svgIcon('<polyline points="3 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>')}</button>
+      </div>
+
+      <div class="wb-zoom">
+        <button class="wb-zoom-btn" id="wb-zoom-out" title="Alejar" aria-label="Alejar">−</button>
+        <button class="wb-zoom-label" id="wb-zoom-label" title="Restablecer zoom (100%)">100%</button>
+        <button class="wb-zoom-btn" id="wb-zoom-in" title="Acercar" aria-label="Acercar">+</button>
+      </div>
+
+      <div class="wb-cursor hidden" id="wb-cursor"></div>
+      <input type="file" id="wb-file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden">
+    </div>`;
+
+  const wb = state.wb = {
     mode: "move",
+    drawColor: PEN_COLORS[0],
     noteColor: NOTE_COLORS[0],
-    penColor: PEN_COLORS[0],
+    penSize: WB_PEN_SIZES[1],
+    markerSize: WB_MARKER_SIZES[1],
+    shapeSize: WB_PEN_SIZES[1],
+    textSize: WB_TEXT_SIZES[1],
+    zoom: 1,
     items: new Map(),
     drawing: null,
+    undo: [],
   };
-  const wb = state.wb;
-  const canvas = $("#wb-canvas");
-  const svg = $("#wb-svg");
+  const canvas = $("#wb-canvas"), svg = $("#wb-svg"), wrap = $("#wb-wrap");
 
-  const HINTS = {
-    move: "Arrastra notas e imágenes; doble clic en una nota para editarla",
-    note: "Haz clic donde quieras crear la nota",
-    draw: "Dibuja manteniendo pulsado el ratón",
-    image: "Elige una imagen para subirla a la pizarra",
-    erase: "Haz clic sobre un elemento para borrarlo",
+  /* -- coordenadas (compensando el zoom) -- */
+  const canvasPoint = e => {
+    const r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / wb.zoom, y: (e.clientY - r.top) / wb.zoom };
   };
 
+  /* -- selección de herramienta y panel contextual -- */
   function setMode(mode) {
     wb.mode = mode;
     canvas.className = `wb-canvas mode-${mode}`;
-    $$(".wb-tool").forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
-    $("#wb-hint").textContent = HINTS[mode];
-    renderSwatches();
+    $$(".wb-tool").forEach(b => {
+      const on = b.dataset.mode === mode;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", on);
+    });
+    $("#wb-cursor").classList.toggle("hidden", mode !== "erase");
+    renderOptions();
     if (mode === "image") $("#wb-file").click();
   }
 
-  function renderSwatches() {
-    const list = wb.mode === "draw" ? PEN_COLORS : NOTE_COLORS;
-    const current = wb.mode === "draw" ? wb.penColor : wb.noteColor;
-    $("#wb-swatches").innerHTML = list.map(c =>
-      `<button class="wb-swatch ${c === current ? "active" : ""}" style="background:${c}" data-c="${c}" title="${c}"></button>`
+  function renderOptions() {
+    const box = $("#wb-options");
+    const showColors = WB_DRAW.has(wb.mode) || wb.mode === "text" || wb.mode === "note";
+    box.classList.toggle("hidden", !showColors);
+    if (!showColors) return;
+
+    const isNote = wb.mode === "note";
+    const colors = isNote ? NOTE_COLORS : PEN_COLORS;
+    const current = isNote ? wb.noteColor : wb.drawColor;
+    $("#wb-colors").innerHTML = colors.map(c =>
+      `<button class="wb-swatch ${c === current ? "active" : ""}" style="--sw:${c}" data-c="${c}" title="${c}"></button>`
     ).join("");
-    $$(".wb-swatch").forEach(s => s.onclick = () => {
-      if (wb.mode === "draw") wb.penColor = s.dataset.c;
-      else wb.noteColor = s.dataset.c;
-      renderSwatches();
+    $$("#wb-colors .wb-swatch").forEach(s => s.onclick = () => {
+      if (isNote) wb.noteColor = s.dataset.c; else wb.drawColor = s.dataset.c;
+      renderOptions();
     });
+
+    const sizes =
+      wb.mode === "pen"      ? { list: WB_PEN_SIZES,    cur: wb.penSize,    set: v => (wb.penSize = v) } :
+      wb.mode === "marker"   ? { list: WB_MARKER_SIZES, cur: wb.markerSize, set: v => (wb.markerSize = v) } :
+      wb.mode === "text"     ? { list: WB_TEXT_SIZES,   cur: wb.textSize,   set: v => (wb.textSize = v) } :
+      WB_SHAPES.has(wb.mode) ? { list: WB_PEN_SIZES,    cur: wb.shapeSize,  set: v => (wb.shapeSize = v) } :
+      null;
+    $("#wb-size-div").classList.toggle("hidden", !sizes);
+    $("#wb-sizes").classList.toggle("hidden", !sizes);
+    if (sizes) {
+      const max = sizes.list[sizes.list.length - 1];
+      const names = ["Fino", "Medio", "Grueso"];
+      $("#wb-sizes").innerHTML = sizes.list.map((v, i) => {
+        const d = Math.round(7 + (v / max) * 13);
+        return `<button class="wb-size ${v === sizes.cur ? "active" : ""}" data-v="${v}" title="${names[i] || v}">` +
+          `<span style="width:${d}px;height:${d}px"></span></button>`;
+      }).join("");
+      $$("#wb-sizes .wb-size").forEach(b => b.onclick = () => { sizes.set(+b.dataset.v); renderOptions(); });
+    }
   }
 
-  $$(".wb-tool").forEach(b => (b.onclick = () => setMode(b.dataset.mode)));
-  renderSwatches();
-  $("#wb-hint").textContent = HINTS.move;
+  const strokeWidth = () =>
+    wb.mode === "marker" ? wb.markerSize :
+    WB_SHAPES.has(wb.mode) ? wb.shapeSize : wb.penSize;
+  const markerColor = c => c + "66"; // ~40% de opacidad (hex de 8 dígitos)
 
-  const canvasPoint = e => {
-    const r = canvas.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
-  };
-
-  /* -- render de elementos -- */
+  /* -- render de elementos (idempotente: reutiliza el nodo si ya existe) -- */
 
   function renderItem(item) {
     wb.items.set(item.id, item);
-    removeNode(item.id);
-    if (item.kind === "stroke") {
-      const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-      pl.setAttribute("points", JSON.parse(item.content || "[]").map(p => p.join(",")).join(" "));
-      pl.setAttribute("style", `stroke:${item.color || "var(--ink)"}`);
-      pl.dataset.id = item.id;
-      pl.addEventListener("pointerdown", e => {
-        if (wb.mode === "erase") { e.stopPropagation(); deleteItem(item.id); }
-      });
-      svg.appendChild(pl);
-      return;
+    if (item.kind === "stroke") return renderStroke(item);
+    if (item.kind === "shape")  return renderShape(item);
+    if (item.kind === "note")   return renderNote(item);
+    if (item.kind === "image")  return renderImage(item);
+    if (item.kind === "text")   return renderText(item);
+  }
+
+  const strokePoints = content => {
+    try { return JSON.parse(content || "[]").map(p => p.join(",")).join(" "); }
+    catch { return ""; }
+  };
+
+  function renderStroke(item) {
+    let el = svg.querySelector(`[data-id="${item.id}"]`);
+    if (!el || el.tagName.toLowerCase() !== "polyline") {
+      if (el) el.remove();
+      el = document.createElementNS(SVGNS, "polyline");
+      el.dataset.id = item.id;
+      svg.appendChild(el);
     }
-    let node;
-    if (item.kind === "note") {
+    el.setAttribute("points", strokePoints(item.content));
+    el.style.fill = "none";
+    el.style.stroke = item.color || "var(--ink)";
+    el.style.strokeWidth = (item.w || 3) + "px";
+  }
+
+  function setShapeGeometry(el, t, x1, y1, x2, y2) {
+    if (t === "rect") {
+      el.setAttribute("x", Math.min(x1, x2));
+      el.setAttribute("y", Math.min(y1, y2));
+      el.setAttribute("width", Math.abs(x2 - x1));
+      el.setAttribute("height", Math.abs(y2 - y1));
+      el.setAttribute("rx", 4);
+    } else if (t === "ellipse") {
+      el.setAttribute("cx", (x1 + x2) / 2);
+      el.setAttribute("cy", (y1 + y2) / 2);
+      el.setAttribute("rx", Math.abs(x2 - x1) / 2);
+      el.setAttribute("ry", Math.abs(y2 - y1) / 2);
+    } else {
+      el.setAttribute("d", t === "arrow" ? arrowPath(x1, y1, x2, y2) : `M ${x1} ${y1} L ${x2} ${y2}`);
+    }
+  }
+
+  function arrowPath(x1, y1, x2, y2) {
+    const a = Math.atan2(y2 - y1, x2 - x1), h = 14;
+    const ax = x2 - h * Math.cos(a - Math.PI / 7), ay = y2 - h * Math.sin(a - Math.PI / 7);
+    const bx = x2 - h * Math.cos(a + Math.PI / 7), by = y2 - h * Math.sin(a + Math.PI / 7);
+    return `M ${x1} ${y1} L ${x2} ${y2} M ${x2} ${y2} L ${ax} ${ay} M ${x2} ${y2} L ${bx} ${by}`;
+  }
+
+  const shapeMeta = content => {
+    try { const o = JSON.parse(content); return { t: o.t || "rect", sw: o.sw || 3 }; }
+    catch { return { t: "rect", sw: 3 }; }
+  };
+
+  function renderShape(item) {
+    const meta = shapeMeta(item.content);
+    const tag = meta.t === "rect" ? "rect" : meta.t === "ellipse" ? "ellipse" : "path";
+    let el = svg.querySelector(`[data-id="${item.id}"]`);
+    if (!el || el.tagName.toLowerCase() !== tag) {
+      if (el) el.remove();
+      el = document.createElementNS(SVGNS, tag);
+      el.dataset.id = item.id;
+      svg.appendChild(el);
+    }
+    el.style.fill = "none";
+    el.style.stroke = item.color || "var(--ink)";
+    el.style.strokeWidth = (meta.sw || 3) + "px";
+    setShapeGeometry(el, meta.t, item.x, item.y, item.x + (item.w || 0), item.y + (item.h || 0));
+  }
+
+  function renderNote(item) {
+    let node = canvas.querySelector(`.wb-note[data-id="${item.id}"]`);
+    if (!node) {
       node = document.createElement("div");
       node.className = "wb-note";
-      node.style.background = item.color || NOTE_COLORS[0];
+      node.dataset.id = item.id;
       node.innerHTML = `<div class="wb-note-text"></div><span class="wb-author label"></span>`;
-      $(".wb-note-text", node).textContent = item.content;
-      $(".wb-author", node).textContent = item.author || "";
-      node.ondblclick = () => {
-        if (wb.mode !== "move") return;
-        const t = $(".wb-note-text", node);
-        t.contentEditable = "plaintext-only";
-        t.focus();
-        t.onblur = async () => {
-          t.contentEditable = "false";
-          const content = t.textContent;
-          if (content !== item.content) {
-            try { await api(`/board/${item.id}`, { method: "PATCH", body: { content } }); }
-            catch (err) { toast(err.message, "error"); }
-          }
-        };
-      };
-    } else if (item.kind === "image") {
-      node = document.createElement("img");
-      node.className = "wb-img";
-      node.src = (item.content.startsWith("/") ? API_BASE : "") + item.content;
-      node.draggable = false;
-      if (item.w) node.style.width = item.w + "px";
-    } else return;
-
+      node.addEventListener("pointerdown", e => itemPointerDown(e, item.id, node));
+      node.ondblclick = () => editNote(item.id, node);
+      canvas.appendChild(node);
+    }
+    node.style.background = item.color || NOTE_COLORS[0];
     node.style.left = item.x + "px";
     node.style.top = item.y + "px";
-    node.dataset.id = item.id;
-    node.addEventListener("pointerdown", e => itemPointerDown(e, item.id, node));
-    canvas.appendChild(node);
+    const t = node.querySelector(".wb-note-text");
+    if (!t.isContentEditable && t.textContent !== item.content) t.textContent = item.content;
+    node.querySelector(".wb-author").textContent = item.author || "";
+  }
+
+  function editNote(id, node) {
+    if (wb.mode !== "move") return;
+    const t = node.querySelector(".wb-note-text");
+    t.contentEditable = "plaintext-only";
+    t.focus();
+    const sel = window.getSelection(); sel.selectAllChildren(t); sel.collapseToEnd();
+    t.onblur = async () => {
+      t.contentEditable = "false";
+      const item = wb.items.get(id); if (!item) return;
+      const content = t.textContent;
+      if (content !== item.content) {
+        try { await api(`/board/${id}`, { method: "PATCH", body: { content } }); }
+        catch (err) { toast(err.message, "error"); }
+      }
+    };
+  }
+
+  function renderImage(item) {
+    let node = canvas.querySelector(`img.wb-img[data-id="${item.id}"]`);
+    if (!node) {
+      node = document.createElement("img");
+      node.className = "wb-img";
+      node.dataset.id = item.id;
+      node.draggable = false;
+      node.src = (item.content.startsWith("/") ? API_BASE : "") + item.content;
+      node.addEventListener("pointerdown", e => itemPointerDown(e, item.id, node));
+      canvas.appendChild(node);
+    }
+    node.style.left = item.x + "px";
+    node.style.top = item.y + "px";
+    if (item.w) node.style.width = item.w + "px";
+  }
+
+  function renderText(item) {
+    let node = canvas.querySelector(`.wb-text[data-id="${item.id}"]`);
+    if (!node) {
+      node = document.createElement("div");
+      node.className = "wb-text";
+      node.dataset.id = item.id;
+      node.addEventListener("pointerdown", e => itemPointerDown(e, item.id, node));
+      node.ondblclick = () => editText(item.id, node);
+      canvas.appendChild(node);
+    }
+    node.style.left = item.x + "px";
+    node.style.top = item.y + "px";
+    node.style.color = item.color || "var(--ink)";
+    node.style.fontSize = (item.w || 22) + "px";
+    if (!node.isContentEditable && node.textContent !== item.content) node.textContent = item.content;
+  }
+
+  function editText(id, node) {
+    if (wb.mode !== "move" && wb.mode !== "text") return;
+    node.contentEditable = "plaintext-only";
+    node.focus();
+    const sel = window.getSelection(); sel.selectAllChildren(node); sel.collapseToEnd();
+    node.onblur = async () => {
+      node.contentEditable = "false";
+      const item = wb.items.get(id); if (!item) return;
+      const content = node.textContent.trim();
+      if (!content) { deleteItem(id); return; }        // texto vacío → se elimina
+      if (content !== item.content) {
+        try { await api(`/board/${id}`, { method: "PATCH", body: { content } }); }
+        catch (err) { toast(err.message, "error"); }
+      }
+    };
   }
 
   function removeNode(id) {
-    const old = canvas.querySelector(`[data-id="${id}"]`) || svg.querySelector(`[data-id="${id}"]`);
-    if (old) old.remove();
+    const el = canvas.querySelector(`[data-id="${id}"]`) || svg.querySelector(`[data-id="${id}"]`);
+    if (el) el.remove();
   }
 
   async function deleteItem(id) {
+    if (!wb.items.has(id)) return;
+    wb.items.delete(id);
+    removeNode(id);
     try { await api(`/board/${id}`, { method: "DELETE" }); }
     catch (err) { toast(err.message, "error"); }
   }
 
-  /* -- arrastre de notas/imágenes -- */
+  /* -- arrastre de notas / imágenes / texto -- */
 
   function itemPointerDown(e, id, node) {
-    if (wb.mode === "erase") { e.stopPropagation(); deleteItem(id); return; }
+    if (wb.mode === "erase") return;               // el borrado lo gestiona el lienzo
     if (wb.mode !== "move") return;
-    if (e.target.isContentEditable) return; // editando texto
+    if (e.target.isContentEditable) return;        // editando texto
     e.preventDefault(); e.stopPropagation();
+    node.setPointerCapture?.(e.pointerId);
     const start = canvasPoint(e);
-    const origin = { x: parseFloat(node.style.left), y: parseFloat(node.style.top) };
+    const origin = { x: parseFloat(node.style.left) || 0, y: parseFloat(node.style.top) || 0 };
     let moved = false;
     const onMove = ev => {
       const p = canvasPoint(ev);
-      const nx = Math.max(0, origin.x + p.x - start.x);
-      const ny = Math.max(0, origin.y + p.y - start.y);
       if (Math.abs(p.x - start.x) + Math.abs(p.y - start.y) > 3) moved = true;
-      node.style.left = nx + "px";
-      node.style.top = ny + "px";
+      node.style.left = Math.max(0, origin.x + p.x - start.x) + "px";
+      node.style.top = Math.max(0, origin.y + p.y - start.y) + "px";
     };
     const onUp = async () => {
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
+      node.removeEventListener("pointermove", onMove);
+      node.removeEventListener("pointerup", onUp);
       if (!moved) return;
       try {
         await api(`/board/${id}`, {
@@ -683,62 +884,184 @@ async function renderWhiteboard() {
         });
       } catch (err) { toast(err.message, "error"); }
     };
+    node.addEventListener("pointermove", onMove);
+    node.addEventListener("pointerup", onUp);
+  }
+
+  /* -- crear notas / texto -- */
+
+  async function createNoteAt(p) {
+    try {
+      const item = await api("/board", {
+        method: "POST",
+        body: { kind: "note", x: p.x, y: p.y, color: wb.noteColor, content: "" },
+      });
+      renderItem(item); wb.undo.push(item.id);
+      setMode("move");
+      const node = canvas.querySelector(`.wb-note[data-id="${item.id}"]`);
+      if (node) editNote(item.id, node);
+    } catch (err) { toast(err.message, "error"); }
+  }
+
+  async function createTextAt(p) {
+    try {
+      const item = await api("/board", {
+        method: "POST",
+        body: { kind: "text", x: p.x, y: p.y, w: wb.textSize, color: wb.drawColor, content: "" },
+      });
+      renderItem(item); wb.undo.push(item.id);
+      setMode("move");
+      const node = canvas.querySelector(`.wb-text[data-id="${item.id}"]`);
+      if (node) editText(item.id, node);
+    } catch (err) { toast(err.message, "error"); }
+  }
+
+  /* -- dibujo libre (lápiz / marcador) y formas -- */
+
+  function startStroke(e, p) {
+    const width = strokeWidth();
+    const color = wb.mode === "marker" ? markerColor(wb.drawColor) : wb.drawColor;
+    const pl = document.createElementNS(SVGNS, "polyline");
+    pl.style.fill = "none";
+    pl.style.stroke = color;
+    pl.style.strokeWidth = width + "px";
+    if (wb.mode === "marker") pl.style.strokeLinecap = "round";
+    svg.appendChild(pl);
+    wb.drawing = { kind: "stroke", color, width, points: [[Math.round(p.x), Math.round(p.y)]], node: pl };
+    canvas.setPointerCapture(e.pointerId);
+  }
+
+  function startShape(e, p) {
+    const t = wb.mode, sw = wb.shapeSize;
+    const tag = t === "rect" ? "rect" : t === "ellipse" ? "ellipse" : "path";
+    const el = document.createElementNS(SVGNS, tag);
+    el.style.fill = "none";
+    el.style.stroke = wb.drawColor;
+    el.style.strokeWidth = sw + "px";
+    svg.appendChild(el);
+    wb.drawing = { kind: "shape", t, sw, color: wb.drawColor, x: p.x, y: p.y, x2: p.x, y2: p.y, node: el };
+    canvas.setPointerCapture(e.pointerId);
+  }
+
+  async function finishStroke(d) {
+    if (d.points.length < 2) { d.node.remove(); return; }
+    try {
+      const item = await api("/board", {
+        method: "POST",
+        body: { kind: "stroke", color: d.color, w: d.width, content: JSON.stringify(d.points) },
+      });
+      d.node.remove();
+      renderItem(item); wb.undo.push(item.id);
+    } catch (err) { d.node.remove(); toast(err.message, "error"); }
+  }
+
+  async function finishShape(d) {
+    const w = d.x2 - d.x, h = d.y2 - d.y;
+    if (Math.abs(w) < 4 && Math.abs(h) < 4) { d.node.remove(); return; }
+    try {
+      const item = await api("/board", {
+        method: "POST",
+        body: { kind: "shape", x: d.x, y: d.y, w, h, color: d.color, content: JSON.stringify({ t: d.t, sw: d.sw }) },
+      });
+      d.node.remove();
+      renderItem(item); wb.undo.push(item.id);
+    } catch (err) { d.node.remove(); toast(err.message, "error"); }
+  }
+
+  /* -- borrador (arrastrar para borrar; hitbox amplia por muestreo) -- */
+
+  function moveEraserCursor(e) {
+    const cur = $("#wb-cursor");
+    const box = $(".wb-screen").getBoundingClientRect();
+    const d = WB_ERASER_R * 2 * wb.zoom;
+    cur.style.width = cur.style.height = d + "px";
+    cur.style.left = (e.clientX - box.left) + "px";
+    cur.style.top = (e.clientY - box.top) + "px";
+  }
+
+  function eraseAt(clientX, clientY, done) {
+    const r = WB_ERASER_R * wb.zoom;
+    const offs = [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r],
+      [r * 0.7, r * 0.7], [-r * 0.7, r * 0.7], [r * 0.7, -r * 0.7], [-r * 0.7, -r * 0.7]];
+    const hit = new Set();
+    for (const [dx, dy] of offs) {
+      for (const el of document.elementsFromPoint(clientX + dx, clientY + dy)) {
+        const owner = el.closest && el.closest("[data-id]");
+        if (owner && (canvas.contains(owner) || svg.contains(owner))) {
+          const id = +owner.dataset.id;
+          if (wb.items.has(id)) hit.add(id);
+        }
+      }
+    }
+    for (const id of hit) if (!done.has(id)) { done.add(id); deleteItem(id); }
+  }
+
+  function startErasing(e) {
+    canvas.setPointerCapture?.(e.pointerId);
+    const done = new Set();
+    const step = ev => { moveEraserCursor(ev); eraseAt(ev.clientX, ev.clientY, done); };
+    step(e);
+    const onUp = ev => {
+      canvas.removeEventListener("pointermove", step);
+      canvas.removeEventListener("pointerup", onUp);
+      try { canvas.releasePointerCapture(ev.pointerId); } catch {}
+    };
+    canvas.addEventListener("pointermove", step);
+    canvas.addEventListener("pointerup", onUp);
+  }
+
+  /* -- desplazamiento del lienzo (herramienta Seleccionar sobre zona vacía) -- */
+
+  function startPan(e) {
+    const sx = e.clientX, sy = e.clientY, sl = wrap.scrollLeft, st = wrap.scrollTop;
+    canvas.classList.add("panning");
+    const onMove = ev => {
+      wrap.scrollLeft = sl - (ev.clientX - sx);
+      wrap.scrollTop = st - (ev.clientY - sy);
+    };
+    const onUp = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      canvas.classList.remove("panning");
+    };
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
   }
 
-  /* -- interacción con el lienzo -- */
+  /* -- eventos del lienzo -- */
 
-  canvas.addEventListener("pointerdown", async e => {
-    if (e.target !== canvas && e.target !== svg) return;
+  canvas.addEventListener("pointerdown", e => {
+    if (wb.mode === "erase") { startErasing(e); return; }
+    if (e.target !== canvas && e.target !== svg) return;   // crear sólo sobre zona vacía
     const p = canvasPoint(e);
-
-    if (wb.mode === "note") {
-      try {
-        const item = await api("/board", {
-          method: "POST",
-          body: { kind: "note", x: p.x, y: p.y, color: wb.noteColor, content: "" },
-        });
-        renderItem(item);
-        setMode("move");
-        const node = canvas.querySelector(`[data-id="${item.id}"]`);
-        if (node) node.dispatchEvent(new Event("dblclick"));
-      } catch (err) { toast(err.message, "error"); }
-      return;
-    }
-
-    if (wb.mode === "draw") {
-      const pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-      pl.setAttribute("style", `stroke:${wb.penColor}`);
-      svg.appendChild(pl);
-      wb.drawing = { points: [[Math.round(p.x), Math.round(p.y)]], node: pl };
-      canvas.setPointerCapture(e.pointerId);
-    }
+    if (wb.mode === "move") return startPan(e);
+    if (wb.mode === "note") return createNoteAt(p);
+    if (wb.mode === "text") return createTextAt(p);
+    if (wb.mode === "pen" || wb.mode === "marker") return startStroke(e, p);
+    if (WB_SHAPES.has(wb.mode)) return startShape(e, p);
   });
 
   canvas.addEventListener("pointermove", e => {
-    if (!wb.drawing) return;
+    if (wb.mode === "erase") moveEraserCursor(e);
+    const d = wb.drawing; if (!d) return;
     const p = canvasPoint(e);
-    const pts = wb.drawing.points;
-    const last = pts[pts.length - 1];
-    if (Math.abs(p.x - last[0]) + Math.abs(p.y - last[1]) < 3) return;
-    pts.push([Math.round(p.x), Math.round(p.y)]);
-    wb.drawing.node.setAttribute("points", pts.map(q => q.join(",")).join(" "));
+    if (d.kind === "stroke") {
+      const last = d.points[d.points.length - 1];
+      if (Math.abs(p.x - last[0]) + Math.abs(p.y - last[1]) < 2) return;
+      d.points.push([Math.round(p.x), Math.round(p.y)]);
+      d.node.setAttribute("points", d.points.map(q => q.join(",")).join(" "));
+    } else if (d.kind === "shape") {
+      d.x2 = p.x; d.y2 = p.y;
+      setShapeGeometry(d.node, d.t, d.x, d.y, d.x2, d.y2);
+    }
   });
 
-  canvas.addEventListener("pointerup", async () => {
-    if (!wb.drawing) return;
-    const { points, node } = wb.drawing;
+  canvas.addEventListener("pointerup", e => {
+    const d = wb.drawing; if (!d) return;
     wb.drawing = null;
-    if (points.length < 2) { node.remove(); return; }
-    try {
-      const item = await api("/board", {
-        method: "POST",
-        body: { kind: "stroke", color: wb.penColor, content: JSON.stringify(points) },
-      });
-      node.remove();
-      renderItem(item);
-    } catch (err) { node.remove(); toast(err.message, "error"); }
+    try { canvas.releasePointerCapture(e.pointerId); } catch {}
+    if (d.kind === "stroke") finishStroke(d);
+    else if (d.kind === "shape") finishShape(d);
   });
 
   /* -- subida de imágenes -- */
@@ -752,64 +1075,110 @@ async function renderWhiteboard() {
       const form = new FormData();
       form.append("image", file, file.name);
       const { url } = await api("/board/image", { method: "POST", body: form });
-      const wrap = $("#wb-wrap");
       const item = await api("/board", {
         method: "POST",
         body: {
           kind: "image", content: url, w: 360,
-          x: wrap.scrollLeft + 80, y: wrap.scrollTop + 80,
+          x: wrap.scrollLeft / wb.zoom + 80, y: wrap.scrollTop / wb.zoom + 80,
         },
       });
-      renderItem(item);
+      renderItem(item); wb.undo.push(item.id);
       toast("Imagen añadida", "ok");
     } catch (err) { toast(err.message, "error"); }
   };
 
+  /* -- deshacer y limpiar todo -- */
+
+  async function undoLast() {
+    while (wb.undo.length) {
+      const id = wb.undo.pop();
+      if (wb.items.has(id)) { deleteItem(id); return; }
+    }
+    toast("Nada que deshacer");
+  }
+
+  function clearBoard() {
+    wb.items.clear();
+    wb.undo.length = 0;
+    svg.innerHTML = "";
+    $$(".wb-note, .wb-img, .wb-text", canvas).forEach(n => n.remove());
+  }
+
+  $("#wb-undo").onclick = undoLast;
+  $("#wb-clear").onclick = () => {
+    if (!wb.items.size) { toast("La pizarra ya está vacía"); return; }
+    confirmModal({
+      title: "Limpiar toda la pizarra",
+      body: "Se eliminarán todas las notas, dibujos, formas e imágenes para todo el equipo. Esta acción no se puede deshacer.",
+      confirm: "Limpiar todo",
+      onConfirm: async () => {
+        try { await api("/board", { method: "DELETE" }); clearBoard(); toast("Pizarra vaciada", "ok"); }
+        catch (err) { toast(err.message, "error"); }
+      },
+    });
+  };
+
+  /* -- zoom -- */
+
+  function setZoom(z, px, py) {
+    z = clamp(z, 0.25, 3);
+    const rect = canvas.getBoundingClientRect();
+    const wr = wrap.getBoundingClientRect();
+    const cx = px ?? (wr.left + wrap.clientWidth / 2);
+    const cy = py ?? (wr.top + wrap.clientHeight / 2);
+    const lx = (cx - rect.left) / wb.zoom, ly = (cy - rect.top) / wb.zoom;
+    wb.zoom = z;
+    canvas.style.transform = `scale(${z})`;
+    wrap.scrollLeft = lx * z - (cx - wr.left);
+    wrap.scrollTop = ly * z - (cy - wr.top);
+    $("#wb-zoom-label").textContent = Math.round(z * 100) + "%";
+  }
+  $("#wb-zoom-in").onclick = () => setZoom(wb.zoom * 1.2);
+  $("#wb-zoom-out").onclick = () => setZoom(wb.zoom / 1.2);
+  $("#wb-zoom-label").onclick = () => setZoom(1);
+  wrap.addEventListener("wheel", e => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    setZoom(wb.zoom * (e.deltaY < 0 ? 1.1 : 0.9), e.clientX, e.clientY);
+  }, { passive: false });
+
+  /* -- herramientas + atajos de teclado -- */
+
+  $$(".wb-tool").forEach(b => (b.onclick = () => setMode(b.dataset.mode)));
+
+  if (state.wbKey) document.removeEventListener("keydown", state.wbKey);
+  state.wbKey = e => {
+    if (state.view !== "whiteboard" || !state.wb) return;
+    const t = e.target;
+    if (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undoLast(); return; }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tool = WB_TOOLS.find(x => x.key.toLowerCase() === e.key.toLowerCase());
+    if (tool) { e.preventDefault(); setMode(tool.mode); }
+  };
+  document.addEventListener("keydown", state.wbKey);
+
+  // Puente para los cambios que llegan por WebSocket de otros usuarios.
+  wb.render = renderItem;
+  wb.removeItem = id => { wb.items.delete(id); removeNode(id); };
+  wb.clearBoard = clearBoard;
+
+  renderOptions();
   items.forEach(renderItem);
 }
 
-/* Cambios de otros usuarios llegan por WebSocket y se aplican en sitio. */
+/* Cambios de otros usuarios llegan por WebSocket y se aplican en sitio,
+   sin re-renderizar toda la vista (así no hay parpadeo ni animación). */
 function wbApply(data) {
   if (!data || !state.wb) return;
-  const canvas = $("#wb-canvas"), svg = $("#wb-svg");
-  if (!canvas) return;
-  if (data.action === "delete") {
-    state.wb.items.delete(data.id);
-    const n = canvas.querySelector(`[data-id="${data.id}"]`) || svg.querySelector(`[data-id="${data.id}"]`);
-    if (n) n.remove();
-    return;
-  }
+  const wb = state.wb;
+  if (data.action === "clear") { wb.clearBoard(); return; }
+  if (data.action === "delete") { wb.removeItem(data.id); return; }
   if (data.action === "upsert" && data.item) {
-    // Evita pisar la nota mientras la estoy editando yo.
-    const editing = document.activeElement?.isContentEditable &&
-      document.activeElement.closest(`[data-id="${data.item.id}"]`);
-    if (!editing) renderWhiteboardItem(data.item);
-  }
-}
-
-// Puente: renderItem vive dentro de renderWhiteboard; lo reexponemos re-renderizando
-// solo ese elemento con un mini-render equivalente.
-function renderWhiteboardItem(item) {
-  // Re-render the single item by delegating to the mounted view's logic:
-  // simplest reliable route is a custom event the view listens to… but to keep
-  // the code flat we re-run the same DOM logic here.
-  const canvas = $("#wb-canvas"), svg = $("#wb-svg");
-  if (!canvas || !state.wb) return;
-  state.wb.items.set(item.id, item);
-  const old = canvas.querySelector(`[data-id="${item.id}"]`) || svg.querySelector(`[data-id="${item.id}"]`);
-  if (item.kind === "stroke") {
-    if (old) { old.setAttribute("points", JSON.parse(item.content || "[]").map(p => p.join(",")).join(" ")); return; }
-    // nuevo trazo de otro usuario: redibuja la vista completa de la pizarra
-    showView("whiteboard");
-    return;
-  }
-  if (!old) { showView("whiteboard"); return; }
-  old.style.left = item.x + "px";
-  old.style.top = item.y + "px";
-  if (item.kind === "note") {
-    const t = old.querySelector(".wb-note-text");
-    if (t && t.textContent !== item.content) t.textContent = item.content;
-    old.style.background = item.color || "";
+    const el = document.querySelector(`[data-id="${data.item.id}"]`);
+    const editing = el && el.contains(document.activeElement) &&
+      document.activeElement.isContentEditable;
+    if (!editing) wb.render(data.item);
   }
 }
 
