@@ -13,4 +13,4 @@
  *
  *   window.LINCE_API_BASE = "/teams";
  */
-window.LINCE_API_BASE = "";
+window.LINCE_API_BASE = "/teams";
