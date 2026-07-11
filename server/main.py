@@ -32,7 +32,7 @@ from pydantic import BaseModel
 from lince import config as lince_config
 from lince.cleanup import clean
 
-from . import auth, db
+from . import auth, db, integrations
 
 app = FastAPI(title="Lince Teams")
 db.init()
@@ -605,6 +605,190 @@ def board_upload_image(image: UploadFile, user: dict = Depends(current_user)):
     name = f"{uuid.uuid4().hex}{ext}"
     (db.UPLOADS_DIR / name).write_bytes(data)
     return {"url": f"/uploads/{name}"}
+
+
+# -- integraciones (Google Drive, GitHub, otras herramientas) -----------------
+
+class IntegrationIn(BaseModel):
+    provider: str
+    name: str = ""
+    url: str = ""
+    owner: str | None = None   # GitHub: alternativa a pegar la URL del repo
+    repo: str | None = None
+    token: str | None = None   # credencial (p. ej. PAT de GitHub) → columna `secret`
+
+
+class IntegrationPatch(BaseModel):
+    name: str | None = None
+    url: str | None = None
+    owner: str | None = None
+    repo: str | None = None
+    token: str | None = None   # "" borra el token guardado; None lo deja igual
+
+
+INTEGRATION_SELECT = """
+SELECT i.*, u.display_name AS author FROM integrations i
+LEFT JOIN users u ON u.id = i.created_by
+"""
+
+
+def _load_integration(iid: int) -> dict:
+    row = db.query_one(INTEGRATION_SELECT + " WHERE i.id = ?", (iid,))
+    if not row:
+        raise HTTPException(404, "Integración no encontrada.")
+    return row
+
+
+def _github_coords(row: dict) -> tuple[str, str, str]:
+    """(owner, repo, token) de una conexión de GitHub; 400 si está incompleta."""
+    if row["provider"] != "github":
+        raise HTTPException(400, "Esta acción es solo para conexiones de GitHub.")
+    try:
+        cfg = json.loads(row.get("config") or "{}")
+    except ValueError:
+        cfg = {}
+    owner, repo = cfg.get("owner"), cfg.get("repo")
+    if not owner or not repo:
+        raise HTTPException(400, "La conexión de GitHub no tiene un repositorio configurado.")
+    return owner, repo, (row.get("secret") or "")
+
+
+@app.get("/api/integrations")
+def list_integrations(user: dict = Depends(current_user)):
+    rows = db.query_all(INTEGRATION_SELECT + " ORDER BY i.provider, i.created_at DESC")
+    return [integrations.public_view(r) for r in rows]
+
+
+@app.post("/api/integrations")
+def create_integration(body: IntegrationIn, admin: dict = Depends(current_admin)):
+    provider = body.provider.strip()
+    if provider not in integrations.PROVIDERS:
+        raise HTTPException(400, "Proveedor no soportado.")
+    name, url, config = body.name.strip(), body.url.strip(), {}
+    if provider == "github":
+        source = f"{body.owner}/{body.repo}" if body.owner and body.repo else url
+        coords = integrations.parse_github_repo(source)
+        if not coords:
+            raise HTTPException(400, "Indicá el repo de GitHub como owner/repo o su URL.")
+        owner, repo = coords
+        config = {"owner": owner, "repo": repo}
+        # Siempre guardamos la URL canónica del repo (aunque hayan pegado un slug
+        # `owner/repo`), para que el enlace "Abrir" no quede relativo.
+        url = f"https://github.com/{owner}/{repo}"
+        name = name or f"{owner}/{repo}"
+    elif provider == "google_drive":
+        if not url:
+            raise HTTPException(400, "Pegá el enlace de Google Drive/Docs.")
+        name = name or "Google Drive"
+    else:  # other
+        if not url:
+            raise HTTPException(400, "Indicá el enlace de la herramienta.")
+        if not name:
+            raise HTTPException(400, "Poné un nombre para la herramienta.")
+    iid = db.execute(
+        "INSERT INTO integrations(provider, name, url, config, secret, created_by) VALUES(?,?,?,?,?,?)",
+        (provider, name, url, json.dumps(config), (body.token or "").strip(), admin["id"]),
+        returning_id=True,
+    )
+    log_activity(admin, f"{admin['display_name']} conectó «{name}»")
+    hub.broadcast("integrations", admin["display_name"])
+    return integrations.public_view(_load_integration(iid))
+
+
+@app.patch("/api/integrations/{iid}")
+def update_integration(iid: int, body: IntegrationPatch, admin: dict = Depends(current_admin)):
+    row = _load_integration(iid)
+    sets: list[str] = []
+    params: list = []
+    if body.name is not None and body.name.strip():
+        sets.append("name = ?"); params.append(body.name.strip())
+    if row["provider"] == "github":
+        # En GitHub, repo y URL van juntos: recalculamos config + URL canónica.
+        if body.owner or body.repo or body.url is not None:
+            source = f"{body.owner}/{body.repo}" if body.owner and body.repo else (body.url or row["url"])
+            coords = integrations.parse_github_repo(source)
+            if not coords:
+                raise HTTPException(400, "Repo de GitHub inválido (usá owner/repo o su URL).")
+            sets += ["config = ?", "url = ?"]
+            params += [json.dumps({"owner": coords[0], "repo": coords[1]}),
+                       f"https://github.com/{coords[0]}/{coords[1]}"]
+    elif body.url is not None:
+        sets.append("url = ?"); params.append(body.url.strip())
+    if body.token is not None:  # "" borra el token; un valor lo reemplaza
+        sets.append("secret = ?"); params.append(body.token.strip())
+    if sets:
+        db.execute(f"UPDATE integrations SET {', '.join(sets)} WHERE id = ?", (*params, iid))
+        hub.broadcast("integrations", admin["display_name"])
+    return integrations.public_view(_load_integration(iid))
+
+
+@app.delete("/api/integrations/{iid}")
+def delete_integration(iid: int, admin: dict = Depends(current_admin)):
+    row = _load_integration(iid)
+    db.execute("DELETE FROM integrations WHERE id = ?", (iid,))
+    log_activity(admin, f"{admin['display_name']} quitó la integración «{row['name']}»")
+    hub.broadcast("integrations", admin["display_name"])
+    return {"ok": True}
+
+
+@app.get("/api/integrations/{iid}/github/issues")
+def github_issues(iid: int, state: str = "open", user: dict = Depends(current_user)):
+    owner, repo, token = _github_coords(_load_integration(iid))
+    try:
+        items = integrations.list_github_issues(owner, repo, token, state=state)
+    except integrations.IntegrationError as e:
+        raise HTTPException(502, str(e))
+    return {
+        "repo": f"{owner}/{repo}",
+        "issues": [i for i in items if not i["is_pr"]],
+        "pulls": [i for i in items if i["is_pr"]],
+    }
+
+
+class GithubIssueIn(BaseModel):
+    title: str = ""
+    body: str = ""
+    task_id: int | None = None   # crear el issue a partir de una tarea existente
+
+
+@app.post("/api/integrations/{iid}/github/issues")
+def github_create_issue(iid: int, body: GithubIssueIn, user: dict = Depends(current_user)):
+    owner, repo, token = _github_coords(_load_integration(iid))
+    title, text = body.title.strip(), body.body
+    if body.task_id:
+        task = db.query_one("SELECT * FROM tasks WHERE id = ?", (body.task_id,))
+        if not task:
+            raise HTTPException(404, "Tarea no encontrada.")
+        title = title or task["title"]
+        text = text or task["description"] or ""
+        text = f"{text}\n\n— Creado desde Lince Teams por {user['display_name']}.".strip()
+    try:
+        issue = integrations.create_github_issue(owner, repo, token, title, text)
+    except integrations.IntegrationError as e:
+        raise HTTPException(502, str(e))
+    log_activity(user, f"{user['display_name']} creó el issue #{issue['number']} en {owner}/{repo}")
+    hub.broadcast("integrations", user["display_name"])
+    return issue
+
+
+@app.post("/api/integrations/{iid}/github/import/{number}")
+def github_import_issue(iid: int, number: int, user: dict = Depends(current_user)):
+    owner, repo, token = _github_coords(_load_integration(iid))
+    try:
+        issue = integrations.get_github_issue(owner, repo, number, token)
+    except integrations.IntegrationError as e:
+        raise HTTPException(502, str(e))
+    desc = (issue["body"] or "").strip()
+    description = f"{desc}\n\n{issue['url']}".strip() if desc else issue["url"]
+    task_id = db.execute(
+        """INSERT INTO tasks(title, description, status, priority, creator_id)
+           VALUES(?,?,'todo','medium',?)""",
+        (issue["title"][:200], description, user["id"]),
+        returning_id=True,
+    )
+    log_activity(user, f"{user['display_name']} importó el issue #{number} de {owner}/{repo} como tarea")
+    hub.broadcast("tasks", user["display_name"])
+    return db.query_one(TASK_SELECT + " WHERE t.id = ?", (task_id,))
 
 
 # -- dashboard --------------------------------------------------------------------
