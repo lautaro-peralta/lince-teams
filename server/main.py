@@ -51,7 +51,7 @@ STATUSES = {"todo", "doing", "done"}
 PRIORITIES = {"low", "medium", "high"}
 ROLES = {"admin", "member"}
 USER_STATUSES = {"active", "pending"}
-BOARD_KINDS = {"note", "stroke", "image"}
+BOARD_KINDS = {"note", "stroke", "image", "shape", "text"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 # -- transcription (lazy-loaded, serialized) ---------------------------------
@@ -567,6 +567,18 @@ def board_update(item_id: int, body: BoardItemPatch, user: dict = Depends(curren
     item = db.query_one(BOARD_SELECT + " WHERE b.id = ?", (item_id,))
     hub.broadcast("board", user["display_name"], {"action": "upsert", "item": item})
     return item
+
+
+@app.delete("/api/board")
+def board_clear(user: dict = Depends(current_user)):
+    """Vacía la pizarra por completo (para todo el equipo)."""
+    for row in db.query_all("SELECT content FROM board_items WHERE kind = 'image'"):
+        content = row["content"] or ""
+        if content.startswith("/uploads/"):
+            (db.UPLOADS_DIR / Path(content).name).unlink(missing_ok=True)
+    db.execute("DELETE FROM board_items")
+    hub.broadcast("board", user["display_name"], {"action": "clear"})
+    return {"ok": True}
 
 
 @app.delete("/api/board/{item_id}")
