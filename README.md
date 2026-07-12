@@ -46,6 +46,12 @@ run_server.bat    # http://localhost:8000
   sus issues y pull requests **en vivo** (importá un issue como tarea o creá un
   issue desde una tarea, usando un token propio) y cualquier otra herramienta
   por enlace. Las conexiones las gestiona un admin; todo el equipo las usa.
+- **Adjuntos en tareas** — cada tarjeta del tablero puede **enlazar recursos**:
+  pegá un doc de Drive (con vista previa dentro de la tarea), un issue/PR de
+  GitHub (con su título traído en vivo) o cualquier URL; desde el panel de
+  GitHub también podés **adjuntar un issue a una tarea existente**, y al
+  importar un issue la tarea queda **vinculada** de vuelta a él. El tablero
+  muestra un contador de adjuntos por tarjeta.
 - **Equipo** (admins) — control de acceso: cada registro nuevo queda
   **pendiente hasta que un administrador lo apruebe**; roles admin/miembro,
   revocación de acceso y eliminación de cuentas.

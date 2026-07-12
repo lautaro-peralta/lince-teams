@@ -21,6 +21,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 PROVIDERS = {"github", "google_drive", "other"}
 
@@ -133,6 +134,22 @@ def list_github_issues(owner: str, repo: str, token: str = "",
     return [_issue_view(r) for r in data]
 
 
+_GH_ISSUE_RE = re.compile(
+    r"github\.com/([^/\s]+)/([^/\s]+)/(issues|pull)/(\d+)", re.IGNORECASE
+)
+
+
+def parse_github_issue_url(url: str | None) -> tuple[str, str, int, bool] | None:
+    """(owner, repo, number, is_pull) de la URL de un issue o PR de GitHub."""
+    m = _GH_ISSUE_RE.search(url or "")
+    if not m:
+        return None
+    owner, repo, kind, num = m.group(1), m.group(2), m.group(3), int(m.group(4))
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return owner, repo, num, (kind.lower() == "pull")
+
+
 def get_github_issue(owner: str, repo: str, number: int, token: str = "") -> dict:
     data = _github("GET", f"/repos/{owner}/{repo}/issues/{int(number)}", token)
     if not isinstance(data, dict):
@@ -197,6 +214,38 @@ def parse_drive(url: str | None) -> dict:
         return info
 
     return info
+
+
+# ── clasificación de enlaces sueltos (adjuntos de tareas) ────────────────────
+
+_DRIVE_TITLES = {
+    "file": "Archivo de Drive", "folder": "Carpeta de Drive",
+    "document": "Documento de Google", "spreadsheet": "Hoja de cálculo",
+    "presentation": "Presentación de Google", "link": "Google Drive",
+}
+
+
+def classify(url: str | None) -> str:
+    """Adivina el proveedor de un enlace suelto: github | google_drive | link."""
+    u = (url or "").lower()
+    if "github.com" in u:
+        return "github"
+    if "drive.google.com" in u or "docs.google.com" in u:
+        return "google_drive"
+    return "link"
+
+
+def drive_title(drive: dict) -> str:
+    return _DRIVE_TITLES.get(drive.get("kind"), "Google Drive")
+
+
+def host_label(url: str | None) -> str:
+    """Etiqueta legible para un enlace genérico: su host sin `www.`."""
+    try:
+        host = urlparse(url or "").netloc.replace("www.", "")
+        return host or (url or "Enlace")
+    except ValueError:
+        return url or "Enlace"
 
 
 # ── serialización segura hacia el cliente ────────────────────────────────────

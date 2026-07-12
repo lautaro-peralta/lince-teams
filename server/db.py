@@ -120,6 +120,17 @@ CREATE TABLE IF NOT EXISTS integrations(
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at {_TS}
 );
+CREATE TABLE IF NOT EXISTS task_links(
+  id {_ID},
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  integration_id INTEGER REFERENCES integrations(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL,
+  ref TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at {_TS}
+);
 """
 
 

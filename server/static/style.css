@@ -559,6 +559,43 @@ body.wb-active .loading { height: 100%; min-height: 0; }
 .int-provider-fixed { font-weight: 600; padding: 2px 0; }
 .int-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--sage); margin: -4px 0 10px; cursor: pointer; }
 .int-check input { width: auto; }
+.gh-issue-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.gh-issue-actions .field-select { padding: 4px 8px; font-size: 13px; max-width: 190px; }
+
+/* ---- adjuntos de tareas ---- */
+.attach-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.attach-empty { padding: 2px 0; }
+.attach-chip {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 6px 8px;
+}
+.attach-ico { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; }
+.attach-ico svg { width: 17px; height: 17px; }
+.attach-title {
+  flex: 1; min-width: 0; color: var(--ink); text-decoration: none; font-size: 13.5px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.attach-title:hover { color: var(--rust); text-decoration: underline; }
+.attach-btn {
+  flex: none; width: 26px; height: 26px; padding: 0; border: none; background: transparent;
+  color: var(--sage); border-radius: 7px; cursor: pointer; display: inline-flex;
+  align-items: center; justify-content: center; transform: none;
+}
+.attach-btn svg { width: 15px; height: 15px; }
+.attach-btn:hover { background: var(--card); color: var(--ink); }
+.attach-remove:hover { color: var(--rust); }
+.attach-add { display: flex; gap: 8px; }
+.attach-add .field-input { flex: 1; }
+.attach-preview:not(:empty) { margin-top: 10px; }
+.attach-preview .drive-frame { height: 320px; }
+.attach-hint { margin-top: 2px; }
+
+/* contador de adjuntos en la tarjeta del tablero */
+.task-attach {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: var(--mono); font-size: 11px; color: var(--sage);
+}
+.task-attach svg { width: 13px; height: 13px; }
 
 @media (max-width: 520px) {
   .int-grid { grid-template-columns: 1fr; }

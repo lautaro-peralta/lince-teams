@@ -13,6 +13,11 @@ const CHART_VAR = { todo: "--chart-todo", doing: "--chart-doing", done: "--chart
 // Backend en otro origen (Vercel + Render): se define en config.js
 const API_BASE = (window.LINCE_API_BASE || "").replace(/\/$/, "");
 const MIC_SVG = `<svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
+// Iconos para adjuntos de tareas (clip, enlace genérico, vista previa, quitar).
+const CLIP_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8.5l-9.19 9.19a4 4 0 0 1-5.66-5.66l9.2-9.19a2.5 2.5 0 0 1 3.53 3.54l-8.84 8.83a1 1 0 0 1-1.42-1.41l8.13-8.13"/></svg>`;
+const LINK_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`;
+const EYE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const X_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
 
 const NOTE_COLORS = ["#F6E7A8", "#EFEAE0", "#DCE8DF", "#F3D9C9", "#FFFFFF"];
 const PEN_COLORS = ["#1B2B23", "#C9622E", "#3D5A45", "#3B7EC0"];
@@ -482,6 +487,7 @@ async function renderBoard() {
       ${t.description ? `<div class="desc">${esc(t.description)}</div>` : ""}
       <div class="task-foot">
         <span class="badge ${PRIORITY_BADGE[t.priority]}">${PRIORITY_LABEL[t.priority]}</span>
+        ${t.links && t.links.length ? `<span class="task-attach" title="${t.links.length} adjunto${t.links.length > 1 ? "s" : ""}">${CLIP_SVG}${t.links.length}</span>` : ""}
         ${t.due_date ? `<span class="due ${late ? "late" : ""}">${late ? "VENCIDA " : ""}${t.due_date}</span>` : ""}
         ${avatarHtml(t.assignee_name)}
       </div>
@@ -521,6 +527,17 @@ function taskModal(task = null) {
         <div class="field"><label class="field-label">Fecha límite</label>
           <input id="m-due" class="field-input" type="date" value="${task?.due_date || ""}"></div>
       </div>
+      ${isEdit ? `
+      <div class="field">
+        <label class="field-label">Adjuntos — docs de Drive, issues de GitHub, enlaces</label>
+        <div id="m-links" class="attach-list"></div>
+        <div class="attach-add">
+          <input id="m-link-url" class="field-input" placeholder="Pegá un enlace (Drive, GitHub, cualquier URL)">
+          <button class="btn-ghost btn-small" id="m-link-add" type="button">Adjuntar</button>
+        </div>
+        <div id="m-link-preview" class="attach-preview"></div>
+      </div>` : `
+      <div class="field attach-hint"><span class="meta">Podés adjuntar docs y enlaces una vez creada la tarea.</span></div>`}
       <div class="modal-actions">
         ${isEdit ? `<button class="btn-ghost btn-small btn-danger" id="m-delete">Eliminar</button>` : ""}
         <div class="spacer"></div>
@@ -534,6 +551,7 @@ function taskModal(task = null) {
   $("#modal-overlay").onclick = e => { if (e.target.id === "modal-overlay") close(); };
   $("#m-cancel").onclick = close;
   $("#m-title").focus();
+  if (isEdit) mountTaskLinks(task);
 
   $("#m-save").onclick = async () => {
     const body = {
@@ -561,6 +579,73 @@ function taskModal(task = null) {
       showView(state.view);
     } catch (err) { toast(err.message, "error"); }
   };
+}
+
+/* ---------- adjuntos de una tarea (dentro del modal) ---------- */
+
+// INTEGRATION_META se define en la sección de integraciones (más abajo, pero es
+// una const de módulo: ya existe cuando esto corre al abrir el modal).
+function attachIcon(provider) {
+  const meta = (typeof INTEGRATION_META !== "undefined") && INTEGRATION_META[provider];
+  return meta ? { icon: meta.icon, accent: meta.accent } : { icon: LINK_SVG, accent: "--sage" };
+}
+
+function linkChip(link) {
+  const { icon, accent } = attachIcon(link.provider);
+  const previewable = link.provider === "google_drive" && link.drive && link.drive.embeddable;
+  return `<div class="attach-chip" data-id="${link.id}">
+    <span class="attach-ico" style="color:var(${accent})">${icon}</span>
+    <a class="attach-title" href="${esc(link.url)}" target="_blank" rel="noopener" title="${esc(link.title)}\n${esc(link.url)}">${esc(link.title)}</a>
+    ${previewable ? `<button class="attach-btn attach-preview-btn" data-embed="${esc(link.drive.embed_url)}" title="Vista previa" type="button">${EYE_SVG}</button>` : ""}
+    <button class="attach-btn attach-remove" title="Quitar adjunto" type="button">${X_SVG}</button>
+  </div>`;
+}
+
+function mountTaskLinks(task) {
+  const listEl = $("#m-links");
+  const previewEl = $("#m-link-preview");
+  const addBtn = $("#m-link-add");
+  const input = $("#m-link-url");
+  if (!listEl) return;
+  let links = Array.isArray(task.links) ? [...task.links] : [];
+
+  function render() {
+    listEl.innerHTML = links.length
+      ? links.map(linkChip).join("")
+      : `<div class="attach-empty meta">Sin adjuntos todavía.</div>`;
+    $$(".attach-remove", listEl).forEach(b => b.onclick = async () => {
+      const id = b.closest(".attach-chip").dataset.id;
+      try {
+        await api(`/tasks/${task.id}/links/${id}`, { method: "DELETE" });
+        links = links.filter(l => String(l.id) !== id);
+        previewEl.innerHTML = ""; previewEl.dataset.open = "";
+        render();
+      } catch (err) { toast(err.message, "error"); }
+    });
+    $$(".attach-preview-btn", listEl).forEach(b => b.onclick = () => {
+      const id = b.closest(".attach-chip").dataset.id;
+      if (previewEl.dataset.open === id) { previewEl.innerHTML = ""; previewEl.dataset.open = ""; return; }
+      previewEl.innerHTML = `<iframe class="drive-frame" src="${esc(b.dataset.embed)}" loading="lazy" referrerpolicy="no-referrer"></iframe>`;
+      previewEl.dataset.open = id;
+    });
+  }
+  render();
+
+  const doAdd = async () => {
+    const url = input.value.trim();
+    if (!url) { toast("Pegá un enlace para adjuntar", "error"); return; }
+    addBtn.disabled = true;
+    try {
+      const link = await api(`/tasks/${task.id}/links`, { method: "POST", body: { url } });
+      links.push(link);
+      input.value = "";
+      render();
+      toast("Adjuntado", "ok");
+    } catch (err) { toast(err.message, "error"); }
+    finally { addBtn.disabled = false; }
+  };
+  addBtn.onclick = doAdd;
+  input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } };
 }
 
 /* Diálogo de confirmación reutilizable para acciones destructivas. */
@@ -1514,6 +1599,11 @@ async function toggleGithubPanel(card, item) {
 }
 
 function renderGithubPanel(panel, item, data) {
+  // Acciones por issue: importar (crea tarea vinculada) o adjuntar a una tarea
+  // existente. Se aíslan en un helper para poder re-renderizarlas tras el picker.
+  const actionsHtml = n => `
+    <button class="btn-ghost btn-small gh-import" data-n="${n}">Importar como tarea</button>
+    <button class="btn-ghost btn-small gh-attach" data-n="${n}">Adjuntar a tarea…</button>`;
   const issueRow = i => `
     <div class="gh-issue">
       <a class="gh-num" href="${esc(i.url)}" target="_blank" rel="noopener">#${i.number}</a>
@@ -1522,13 +1612,15 @@ function renderGithubPanel(panel, item, data) {
         <div class="gh-meta">${i.author ? `<span class="meta">por ${esc(i.author)}</span>` : ""}
           ${i.labels.map(l => `<span class="gh-label">${esc(l.name)}</span>`).join("")}</div>
       </div>
-      <button class="btn-ghost btn-small gh-import" data-n="${i.number}">Importar como tarea</button>
+      <div class="gh-issue-actions" data-n="${i.number}">${actionsHtml(i.number)}</div>
     </div>`;
   const prRow = p => `
     <div class="gh-issue">
       <a class="gh-num gh-pr" href="${esc(p.url)}" target="_blank" rel="noopener">#${p.number}</a>
       <a class="gh-title grow" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>
-      ${p.author ? `<span class="meta">${esc(p.author)}</span>` : ""}
+      <div class="gh-issue-actions" data-n="${p.number}">
+        <button class="btn-ghost btn-small gh-attach" data-n="${p.number}">Adjuntar a tarea…</button>
+      </div>
     </div>`;
 
   panel.innerHTML = `
@@ -1541,14 +1633,42 @@ function renderGithubPanel(panel, item, data) {
     ${data.issues.length ? data.issues.map(issueRow).join("") : `<div class="empty">Sin issues abiertos.</div>`}
     ${data.pulls.length ? `<div class="gh-section-label label">Pull requests · ${data.pulls.length}</div>${data.pulls.map(prRow).join("")}` : ""}`;
 
-  $$(".gh-import", panel).forEach(b => b.onclick = async () => {
-    b.disabled = true;
-    try {
-      await api(`/integrations/${item.id}/github/import/${b.dataset.n}`, { method: "POST" });
-      toast("Issue importado como tarea — miralo en el Tablero", "ok");
-      b.textContent = "Importado ✓";
-    } catch (err) { toast(err.message, "error"); b.disabled = false; }
-  });
+  wireActions();
+
+  function wireActions() {
+    $$(".gh-import", panel).forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try {
+        await api(`/integrations/${item.id}/github/import/${b.dataset.n}`, { method: "POST" });
+        toast("Issue importado como tarea — miralo en el Tablero", "ok");
+        b.textContent = "Importado ✓";
+      } catch (err) { toast(err.message, "error"); b.disabled = false; }
+    });
+    $$(".gh-attach", panel).forEach(b => b.onclick = () => openAttachPicker(b.dataset.n));
+  }
+
+  async function openAttachPicker(n) {
+    const box = panel.querySelector(`.gh-issue-actions[data-n="${n}"]`);
+    let tasks;
+    try { tasks = await api("/tasks"); }
+    catch (err) { toast(err.message, "error"); return; }
+    if (!tasks.length) { toast("No hay tareas todavía. Creá una primero.", "error"); return; }
+    box.innerHTML = `
+      <select class="field-select gh-attach-task">${tasks.map(t =>
+        `<option value="${t.id}">${esc(t.title)}</option>`).join("")}</select>
+      <button class="btn-primary btn-small gh-attach-do">Adjuntar</button>
+      <button class="btn-ghost btn-small gh-attach-cancel">Cancelar</button>`;
+    const reset = () => { box.innerHTML = actionsHtml(n); wireActions(); };
+    $(".gh-attach-cancel", box).onclick = reset;
+    $(".gh-attach-do", box).onclick = async () => {
+      const tid = $(".gh-attach-task", box).value;
+      try {
+        await api(`/tasks/${tid}/links`, { method: "POST", body: { integration_id: item.id, ref: n } });
+        toast("Issue adjuntado a la tarea", "ok");
+        reset();
+      } catch (err) { toast(err.message, "error"); }
+    };
+  }
 
   $(".gh-create-btn", panel).onclick = async () => {
     const input = $(".gh-new-title", panel);
