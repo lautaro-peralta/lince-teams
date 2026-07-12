@@ -41,17 +41,17 @@ run_server.bat    # http://localhost:8000
   mano alzada e imágenes. Todos los conectados ven los cambios al instante.
 - **Transcripciones** — graba desde el navegador; el audio se transcribe con
   el modelo local del servidor y queda compartido con el equipo.
-- **Integraciones** — las herramientas del equipo en un solo lugar: enlaces a
-  **Google Drive/Docs** (con vista previa incrustada), **repos de GitHub** con
-  sus issues y pull requests **en vivo** (importá un issue como tarea o creá un
-  issue desde una tarea, usando un token propio) y cualquier otra herramienta
-  por enlace. Las conexiones las gestiona un admin; todo el equipo las usa.
 - **Adjuntos en tareas** — cada tarjeta del tablero puede **enlazar recursos**:
-  pegá un doc de Drive (con vista previa dentro de la tarea), un issue/PR de
-  GitHub (con su título traído en vivo) o cualquier URL; desde el panel de
-  GitHub también podés **adjuntar un issue a una tarea existente**, y al
-  importar un issue la tarea queda **vinculada** de vuelta a él. El tablero
-  muestra un contador de adjuntos por tarjeta.
+  pegá un doc de **Google Drive** (con vista previa dentro de la tarea), un
+  issue/PR de **GitHub** (con su título traído en vivo) o cualquier URL. El
+  tablero muestra un contador de adjuntos por tarjeta.
+
+  > Las **conexiones** de integraciones (Google Drive, GitHub, tokens…) se
+  > **configuran en Startup OS** (`/startup-os/#/integraciones`), no en Teams.
+  > Teams **usa** esas conexiones —para enriquecer el título de un issue de
+  > GitHub al adjuntarlo, por ejemplo— leyéndolas del mismo Supabase compartido.
+  > La API sigue viviendo en este servicio (`/api/integrations`), consumida por
+  > Startup OS vía el login unificado.
 - **Equipo** (admins) — control de acceso: cada registro nuevo queda
   **pendiente hasta que un administrador lo apruebe**; roles admin/miembro,
   revocación de acceso y eliminación de cuentas.
