@@ -27,6 +27,15 @@
   --ring: 0 0 0 3px rgba(201,98,46,0.22);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Safe areas (notch / home indicator). En la app móvil, Capacitor inyecta
+     --safe-area-inset-*; en navegadores vale env() y fuera de todo, 0. */
+  --sat: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --sab: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --sal: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+  --sar: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+  /* Alto de la barra inferior del app-shell; el shell lo redefine al montarla. */
+  --lince-nav: 0px;
 }
 
 * { box-sizing: border-box; margin: 0; }
@@ -146,7 +155,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 .app { min-height: 100vh; display: flex; flex-direction: column; }
 .masthead {
   display: flex; align-items: center; gap: 28px;
-  padding: 12px 32px 0;
+  padding: calc(12px + var(--sat)) calc(32px + var(--sar)) 0 calc(32px + var(--sal));
   background: var(--bg);
   border-bottom: 1px solid var(--line-strong);
 }
@@ -174,7 +183,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
   flex-shrink: 0;
 }
 
-.main { flex: 1; padding: 28px 24px 64px; max-width: 1060px; width: 100%; margin-inline: auto; }
+.main { flex: 1; padding: 28px 24px calc(64px + var(--sab) + var(--lince-nav)); max-width: 1060px; width: 100%; margin-inline: auto; }
 .view-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
 .view-head h2 { font-size: 2rem; }
 .view-sub { color: var(--sage); font-size: 14px; margin-top: 4px; }
@@ -253,9 +262,21 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
   cursor: grab;
   box-shadow: var(--shadow-1);
   transition: box-shadow .15s, transform .15s;
+  /* Táctil: el dedo puede scrollear la página sobre la tarjeta; el arrastre
+     se activa con pulsación mantenida (ver startCardDrag en app.js). */
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .task-card:hover { box-shadow: var(--shadow-2); transform: translateY(-1px); }
 .task-card.dragging { opacity: 0.45; }
+/* Clon que sigue al puntero durante el arrastre (mouse o dedo). */
+.task-ghost {
+  position: fixed; z-index: 120; pointer-events: none;
+  margin: 0; opacity: 0.92; box-shadow: var(--shadow-2);
+  transform: rotate(1.5deg);
+}
 .task-card .title { font-weight: 600; font-size: 14.5px; margin-bottom: 4px; }
 .task-card .desc {
   color: var(--sage); font-size: 13px; margin-bottom: 10px;
@@ -275,14 +296,20 @@ body.wb-active .main { max-width: none; padding: 0; height: 100%; min-height: 0;
   position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bg);
   animation: fade-in .25s var(--ease-out-expo);
 }
-.wb-wrap { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; }
+.wb-wrap { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; touch-action: none; }
 .wb-canvas {
   position: relative; width: 2400px; height: 1600px;
   transform-origin: 0 0;
   background-color: var(--bg);
   background-image: radial-gradient(var(--line) 1px, transparent 1px);
   background-size: 26px 26px;
+  /* Todo gesto táctil lo maneja la pizarra (dibujo, pan, pellizco); sin esto
+     el navegador scrollea/zoomea la página y corta los pointer events. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
+.wb-canvas [contenteditable] { user-select: text; -webkit-user-select: text; }
 .wb-canvas.mode-move { cursor: grab; }
 .wb-canvas.panning { cursor: grabbing; }
 .wb-canvas.mode-pen, .wb-canvas.mode-marker,
@@ -308,6 +335,7 @@ body.wb-active .main { max-width: none; padding: 0; height: 100%; min-height: 0;
 }
 .wb-tool {
   width: 42px; height: 42px; display: grid; place-items: center;
+  flex: none; /* en la barra horizontal (móvil) no se comprimen: scrollean */
   border: none; background: transparent; border-radius: 11px; color: var(--ink);
   transition: background .12s, color .12s;
 }
@@ -567,17 +595,42 @@ body.wb-active .loading { height: 100%; min-height: 0; }
 
 /* ---- responsive / accesibilidad ---- */
 @media (max-width: 760px) {
-  .masthead { flex-wrap: wrap; gap: 10px; padding: 10px 16px 0; }
+  .masthead { flex-wrap: wrap; gap: 10px; padding: calc(10px + var(--sat)) calc(16px + var(--sar)) 0 calc(16px + var(--sal)); }
   .mast-nav { order: 3; width: 100%; justify-content: flex-start; overflow-x: auto; }
-  .main { padding: 20px 14px 48px; }
+  .main { padding: 20px 14px calc(48px + var(--sab) + var(--lince-nav)); }
   /* la barra de herramientas pasa a la parte inferior en horizontal */
   .wb-toolbar {
-    top: auto; bottom: 12px; left: 50%; transform: translateX(-50%);
+    top: auto; bottom: calc(12px + var(--sab) + var(--lince-nav)); left: 50%; transform: translateX(-50%);
     flex-direction: row; max-height: none; max-width: calc(100% - 20px);
     overflow-x: auto; overflow-y: hidden;
   }
-  .wb-zoom { bottom: 66px; }
-  .wb-options { max-width: calc(100% - 28px); top: 10px; }
+  .wb-zoom { bottom: calc(66px + var(--sab) + var(--lince-nav)); }
+  .wb-options { max-width: calc(100% - 28px); top: calc(10px + var(--sat)); }
+  .wb-actions { top: calc(14px + var(--sat)); }
+}
+
+/* Targets táctiles ≥44px en pantallas táctiles (design system §4). */
+@media (pointer: coarse) {
+  .mast-nav .tab { min-height: 44px; }
+  .btn-small { min-height: 36px; }
+  .wb-tool { width: 46px; height: 46px; }
+  .wb-act { width: 44px; height: 44px; }
+  .wb-zoom-btn { width: 40px; height: 40px; }
+  .wb-zoom-label { min-height: 40px; }
+  .wb-swatch { width: 28px; height: 28px; }
+  .wb-size { width: 36px; height: 36px; }
+}
+
+/* ---- modo app móvil (shell inyecta html.lince-app) ---- */
+/* La barra inferior del shell reemplaza los enlaces cruzados del masthead. */
+html.lince-app .mast-apps { display: none !important; }
+/* La pizarra a pantalla completa descuenta la barra del shell y el safe-area. */
+html.lince-app body.wb-active .app { height: calc(100dvh - var(--lince-nav) - var(--sab)); }
+html.lince-app .toast-root { bottom: calc(20px + var(--sab) + var(--lince-nav)); }
+/* Con .app ya acortada, los controles de la pizarra no vuelven a sumar la barra. */
+@media (max-width: 760px) {
+  html.lince-app .wb-toolbar { bottom: 12px; }
+  html.lince-app .wb-zoom { bottom: 66px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -2,8 +2,18 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Lince Teams</title>
+<script>
+/* Dentro de la app móvil Lince (WebView con UA "LinceApp") se carga el shell
+   compartido del origen principal: barra inferior entre apps, botón atrás,
+   status bar. Fuera de la app ni se solicita; en standalone el 404 es inocuo. */
+if (navigator.userAgent.indexOf("LinceApp") !== -1) {
+  var s = document.createElement("script");
+  s.src = "/app-shell.js"; s.defer = true;
+  document.head.appendChild(s);
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Source+Sans+3:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
