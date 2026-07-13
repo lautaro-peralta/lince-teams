@@ -361,10 +361,43 @@ LEFT JOIN users a ON a.id = t.assignee_id
 LEFT JOIN users c ON c.id = t.creator_id
 """
 
+# Adjuntos de una tarea: docs de Drive, issues/PRs de GitHub o enlaces sueltos.
+LINK_SELECT = """
+SELECT l.*, u.display_name AS author FROM task_links l
+LEFT JOIN users u ON u.id = l.created_by
+"""
+
+
+def _link_view(row: dict) -> dict:
+    out = {k: row.get(k) for k in
+           ("id", "task_id", "integration_id", "provider", "title", "url", "ref", "created_at", "author")}
+    if row["provider"] == "google_drive":
+        out["drive"] = integrations.parse_drive(row["url"])
+    return out
+
+
+def _links_for_tasks(task_ids: list[int]) -> dict[int, list[dict]]:
+    """{task_id: [adjuntos]} para un lote de tareas, en una sola consulta."""
+    if not task_ids:
+        return {}
+    placeholders = ",".join("?" for _ in task_ids)
+    rows = db.query_all(
+        LINK_SELECT + f" WHERE l.task_id IN ({placeholders}) ORDER BY l.created_at",
+        tuple(task_ids),
+    )
+    grouped: dict[int, list[dict]] = {}
+    for r in rows:
+        grouped.setdefault(r["task_id"], []).append(_link_view(r))
+    return grouped
+
 
 @app.get("/api/tasks")
 def list_tasks(user: dict = Depends(current_user)):
-    return db.query_all(TASK_SELECT + " ORDER BY t.updated_at DESC")
+    tasks = db.query_all(TASK_SELECT + " ORDER BY t.updated_at DESC")
+    links = _links_for_tasks([t["id"] for t in tasks])
+    for t in tasks:
+        t["links"] = links.get(t["id"], [])
+    return tasks
 
 
 @app.post("/api/tasks")
@@ -424,6 +457,103 @@ def delete_task(task_id: int, user: dict = Depends(current_user)):
         raise HTTPException(404, "Tarea no encontrada.")
     db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     log_activity(user, f"{user['display_name']} eliminó «{task['title']}»")
+    hub.broadcast("tasks", user["display_name"])
+    return {"ok": True}
+
+
+# -- adjuntos de tareas (Drive, GitHub, enlaces) ------------------------------
+
+class LinkIn(BaseModel):
+    url: str = ""
+    title: str | None = None
+    integration_id: int | None = None
+    ref: str | None = None   # atajo: nº de issue/PR de una conexión GitHub
+
+
+def _github_issue_title(owner: str, repo: str, number: int) -> str | None:
+    """Mejor esfuerzo: si hay una conexión GitHub de ese repo, trae el título
+    real del issue (con su token si lo tiene). Ante cualquier fallo, None y se
+    usa un título por defecto (no bloquea adjuntar el enlace)."""
+    for row in db.query_all("SELECT * FROM integrations WHERE provider = 'github'"):
+        try:
+            cfg = json.loads(row.get("config") or "{}")
+        except ValueError:
+            continue
+        if (cfg.get("owner", "").lower() == owner.lower()
+                and cfg.get("repo", "").lower() == repo.lower()):
+            try:
+                return integrations.get_github_issue(owner, repo, number, row.get("secret") or "")["title"]
+            except integrations.IntegrationError:
+                return None
+    return None
+
+
+@app.get("/api/tasks/{task_id}/links")
+def list_task_links(task_id: int, user: dict = Depends(current_user)):
+    if not db.query_one("SELECT id FROM tasks WHERE id = ?", (task_id,)):
+        raise HTTPException(404, "Tarea no encontrada.")
+    return _links_for_tasks([task_id]).get(task_id, [])
+
+
+@app.post("/api/tasks/{task_id}/links")
+def add_task_link(task_id: int, body: LinkIn, user: dict = Depends(current_user)):
+    task = db.query_one("SELECT * FROM tasks WHERE id = ?", (task_id,))
+    if not task:
+        raise HTTPException(404, "Tarea no encontrada.")
+    provider, url = "link", (body.url or "").strip()
+    title = (body.title or "").strip()
+    ref = (body.ref or "").strip() or None
+    integration_id = body.integration_id
+
+    if integration_id and ref:
+        # Atajo: adjuntar un issue/PR de una conexión GitHub por su número.
+        owner, repo, token = _github_coords(_load_integration(integration_id))
+        try:
+            issue = integrations.get_github_issue(owner, repo, int(ref), token)
+        except integrations.IntegrationError as e:
+            raise HTTPException(502, str(e))
+        provider, url = "github", issue["url"]
+        title = title or f"#{issue['number']} · {issue['title']}"
+        ref = str(issue["number"])
+    elif url:
+        provider = integrations.classify(url)
+        if provider == "github":
+            parsed = integrations.parse_github_issue_url(url)
+            if parsed:
+                owner, repo, number, is_pull = parsed
+                ref = str(number)
+                if not title:
+                    fetched = _github_issue_title(owner, repo, number)
+                    kind = "PR" if is_pull else "issue"
+                    title = f"#{number} · {fetched}" if fetched else f"{owner}/{repo} {kind} #{number}"
+            elif not title:
+                title = "GitHub"
+        elif provider == "google_drive":
+            drive = integrations.parse_drive(url)
+            ref = drive.get("id") or None
+            title = title or integrations.drive_title(drive)
+        else:
+            title = title or integrations.host_label(url)
+    else:
+        raise HTTPException(400, "Pegá un enlace para adjuntar.")
+
+    lid = db.execute(
+        """INSERT INTO task_links(task_id, integration_id, provider, title, url, ref, created_by)
+           VALUES(?,?,?,?,?,?,?)""",
+        (task_id, integration_id, provider, title, url, ref, user["id"]),
+        returning_id=True,
+    )
+    log_activity(user, f"{user['display_name']} adjuntó «{title}» a «{task['title']}»")
+    hub.broadcast("tasks", user["display_name"])
+    return _link_view(db.query_one(LINK_SELECT + " WHERE l.id = ?", (lid,)))
+
+
+@app.delete("/api/tasks/{task_id}/links/{link_id}")
+def delete_task_link(task_id: int, link_id: int, user: dict = Depends(current_user)):
+    row = db.query_one("SELECT * FROM task_links WHERE id = ? AND task_id = ?", (link_id, task_id))
+    if not row:
+        raise HTTPException(404, "Adjunto no encontrado.")
+    db.execute("DELETE FROM task_links WHERE id = ?", (link_id,))
     hub.broadcast("tasks", user["display_name"])
     return {"ok": True}
 
@@ -785,6 +915,12 @@ def github_import_issue(iid: int, number: int, user: dict = Depends(current_user
            VALUES(?,?,'todo','medium',?)""",
         (issue["title"][:200], description, user["id"]),
         returning_id=True,
+    )
+    # Vínculo bidireccional: la tarea importada queda enlazada al issue de origen.
+    db.execute(
+        """INSERT INTO task_links(task_id, integration_id, provider, title, url, ref, created_by)
+           VALUES(?,?,'github',?,?,?,?)""",
+        (task_id, iid, f"#{issue['number']} · {issue['title']}", issue["url"], str(issue["number"]), user["id"]),
     )
     log_activity(user, f"{user['display_name']} importó el issue #{number} de {owner}/{repo} como tarea")
     hub.broadcast("tasks", user["display_name"])

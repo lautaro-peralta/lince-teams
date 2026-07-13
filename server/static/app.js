@@ -13,6 +13,11 @@ const CHART_VAR = { todo: "--chart-todo", doing: "--chart-doing", done: "--chart
 // Backend en otro origen (Vercel + Render): se define en config.js
 const API_BASE = (window.LINCE_API_BASE || "").replace(/\/$/, "");
 const MIC_SVG = `<svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
+// Iconos para adjuntos de tareas (clip, enlace genérico, vista previa, quitar).
+const CLIP_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8.5l-9.19 9.19a4 4 0 0 1-5.66-5.66l9.2-9.19a2.5 2.5 0 0 1 3.53 3.54l-8.84 8.83a1 1 0 0 1-1.42-1.41l8.13-8.13"/></svg>`;
+const LINK_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`;
+const EYE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const X_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
 
 const NOTE_COLORS = ["#F6E7A8", "#EFEAE0", "#DCE8DF", "#F3D9C9", "#FFFFFF"];
 const PEN_COLORS = ["#1B2B23", "#C9622E", "#3D5A45", "#3B7EC0"];
@@ -179,7 +184,7 @@ async function enterApp() {
   showView(viewFromHash() || state.view);
 }
 
-// Enlaces externos / botón atrás: /teams/#integrations cambia de pestaña.
+// Enlaces con hash / botón atrás: /teams/#tablero abre esa pestaña.
 window.addEventListener("hashchange", () => {
   const v = viewFromHash();
   if (v && state.me && v !== state.view) showView(v);
@@ -190,12 +195,11 @@ const VIEWS = {
   board: renderBoard,
   whiteboard: renderWhiteboard,
   transcripts: renderTranscripts,
-  integrations: renderIntegrations,
   team: renderTeam,
 };
 
-/* Vista inicial / enlazable por URL: /teams/#integrations abre esa pestaña
-   directamente (lo usan el Panel y Startup OS). Solo acepta vistas conocidas. */
+/* Vista inicial / enlazable por URL (#/tablero, #/pizarra, …). Solo acepta
+   vistas conocidas; el resto cae en el panel. */
 function viewFromHash() {
   const key = (location.hash || "").replace(/^#\/?/, "");
   return VIEWS[key] ? key : null;
@@ -272,7 +276,6 @@ async function connectWs() {
       else showView(state.view);
     }
     if (msg.scope === "transcripts" && state.view === "transcripts") showView(state.view);
-    if (msg.scope === "integrations" && state.view === "integrations") showView("integrations");
     if (msg.scope === "board" && state.wb) wbApply(msg.data);
   };
   // Reintenta mientras siga habiendo sesión (token propio o de Supabase).
@@ -593,6 +596,7 @@ async function renderBoard() {
       ${t.description ? `<div class="desc">${esc(t.description)}</div>` : ""}
       <div class="task-foot">
         <span class="badge ${PRIORITY_BADGE[t.priority]}">${PRIORITY_LABEL[t.priority]}</span>
+        ${t.links && t.links.length ? `<span class="task-attach" title="${t.links.length} adjunto${t.links.length > 1 ? "s" : ""}">${CLIP_SVG}${t.links.length}</span>` : ""}
         ${t.due_date ? `<span class="due ${late ? "late" : ""}">${late ? "VENCIDA " : ""}${t.due_date}</span>` : ""}
         ${avatarHtml(t.assignee_name)}
       </div>
@@ -632,6 +636,17 @@ function taskModal(task = null) {
         <div class="field"><label class="field-label">Fecha límite</label>
           <input id="m-due" class="field-input" type="date" value="${task?.due_date || ""}"></div>
       </div>
+      ${isEdit ? `
+      <div class="field">
+        <label class="field-label">Adjuntos — docs de Drive, issues de GitHub, enlaces</label>
+        <div id="m-links" class="attach-list"></div>
+        <div class="attach-add">
+          <input id="m-link-url" class="field-input" placeholder="Pegá un enlace (Drive, GitHub, cualquier URL)">
+          <button class="btn-ghost btn-small" id="m-link-add" type="button">Adjuntar</button>
+        </div>
+        <div id="m-link-preview" class="attach-preview"></div>
+      </div>` : `
+      <div class="field attach-hint"><span class="meta">Podés adjuntar docs y enlaces una vez creada la tarea.</span></div>`}
       <div class="modal-actions">
         ${isEdit ? `<button class="btn-ghost btn-small btn-danger" id="m-delete">Eliminar</button>` : ""}
         <div class="spacer"></div>
@@ -645,6 +660,7 @@ function taskModal(task = null) {
   $("#modal-overlay").onclick = e => { if (e.target.id === "modal-overlay") close(); };
   $("#m-cancel").onclick = close;
   $("#m-title").focus();
+  if (isEdit) mountTaskLinks(task);
 
   $("#m-save").onclick = async () => {
     const body = {
@@ -672,6 +688,73 @@ function taskModal(task = null) {
       showView(state.view);
     } catch (err) { toast(err.message, "error"); }
   };
+}
+
+/* ---------- adjuntos de una tarea (dentro del modal) ---------- */
+
+// INTEGRATION_META (mapa de iconos/color por proveedor) se define más abajo,
+// pero es una const de módulo: ya existe cuando esto corre al abrir el modal.
+function attachIcon(provider) {
+  const meta = (typeof INTEGRATION_META !== "undefined") && INTEGRATION_META[provider];
+  return meta ? { icon: meta.icon, accent: meta.accent } : { icon: LINK_SVG, accent: "--sage" };
+}
+
+function linkChip(link) {
+  const { icon, accent } = attachIcon(link.provider);
+  const previewable = link.provider === "google_drive" && link.drive && link.drive.embeddable;
+  return `<div class="attach-chip" data-id="${link.id}">
+    <span class="attach-ico" style="color:var(${accent})">${icon}</span>
+    <a class="attach-title" href="${esc(link.url)}" target="_blank" rel="noopener" title="${esc(link.title)}\n${esc(link.url)}">${esc(link.title)}</a>
+    ${previewable ? `<button class="attach-btn attach-preview-btn" data-embed="${esc(link.drive.embed_url)}" title="Vista previa" type="button">${EYE_SVG}</button>` : ""}
+    <button class="attach-btn attach-remove" title="Quitar adjunto" type="button">${X_SVG}</button>
+  </div>`;
+}
+
+function mountTaskLinks(task) {
+  const listEl = $("#m-links");
+  const previewEl = $("#m-link-preview");
+  const addBtn = $("#m-link-add");
+  const input = $("#m-link-url");
+  if (!listEl) return;
+  let links = Array.isArray(task.links) ? [...task.links] : [];
+
+  function render() {
+    listEl.innerHTML = links.length
+      ? links.map(linkChip).join("")
+      : `<div class="attach-empty meta">Sin adjuntos todavía.</div>`;
+    $$(".attach-remove", listEl).forEach(b => b.onclick = async () => {
+      const id = b.closest(".attach-chip").dataset.id;
+      try {
+        await api(`/tasks/${task.id}/links/${id}`, { method: "DELETE" });
+        links = links.filter(l => String(l.id) !== id);
+        previewEl.innerHTML = ""; previewEl.dataset.open = "";
+        render();
+      } catch (err) { toast(err.message, "error"); }
+    });
+    $$(".attach-preview-btn", listEl).forEach(b => b.onclick = () => {
+      const id = b.closest(".attach-chip").dataset.id;
+      if (previewEl.dataset.open === id) { previewEl.innerHTML = ""; previewEl.dataset.open = ""; return; }
+      previewEl.innerHTML = `<iframe class="drive-frame" src="${esc(b.dataset.embed)}" loading="lazy" referrerpolicy="no-referrer"></iframe>`;
+      previewEl.dataset.open = id;
+    });
+  }
+  render();
+
+  const doAdd = async () => {
+    const url = input.value.trim();
+    if (!url) { toast("Pegá un enlace para adjuntar", "error"); return; }
+    addBtn.disabled = true;
+    try {
+      const link = await api(`/tasks/${task.id}/links`, { method: "POST", body: { url } });
+      links.push(link);
+      input.value = "";
+      render();
+      toast("Adjuntado", "ok");
+    } catch (err) { toast(err.message, "error"); }
+    finally { addBtn.disabled = false; }
+  };
+  addBtn.onclick = doAdd;
+  input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } };
 }
 
 /* Diálogo de confirmación reutilizable para acciones destructivas. */
@@ -1581,9 +1664,9 @@ async function toggleRecording() {
   }
 }
 
-/* ---------- integraciones (Google Drive, GitHub, otras herramientas) ---------- */
-
-const GEAR_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+/* ---------- metadatos de proveedores (iconos de los adjuntos de tareas) ----------
+   La configuración de integraciones vive ahora en Startup OS; Teams solo las
+   USA (adjuntos en tareas), así que acá solo queda el mapa de iconos/color. */
 
 const INTEGRATION_META = {
   github: {
@@ -1602,263 +1685,6 @@ const INTEGRATION_META = {
     accent: "--moss",
   },
 };
-const PROVIDER_ORDER = ["github", "google_drive", "other"];
-const DRIVE_KIND_LABEL = {
-  file: "Archivo", folder: "Carpeta", document: "Documento",
-  spreadsheet: "Hoja de cálculo", presentation: "Presentación",
-};
-
-function hostOf(url) {
-  try { return new URL(url).host.replace(/^www\./, ""); } catch { return url || ""; }
-}
-
-async function renderIntegrations() {
-  const seq = ++state.renderSeq;
-  const items = await api("/integrations");
-  if (seq !== state.renderSeq || state.view !== "integrations") return;
-  const isAdmin = state.me.role === "admin";
-
-  const groups = PROVIDER_ORDER
-    .map(p => [p, items.filter(i => i.provider === p)])
-    .filter(([, list]) => list.length);
-
-  $("#main").innerHTML = `<div class="view">
-    <div class="view-head">
-      <div><h2>Integraciones</h2>
-      <div class="view-sub">Las herramientas del equipo en un solo lugar: Google Drive, GitHub y más. ${
-        isAdmin ? "Vos gestionás las conexiones; todo el equipo las usa." : "Un administrador gestiona las conexiones."}</div></div>
-      ${isAdmin ? `<button class="btn-primary" id="int-new">+ Conectar herramienta</button>` : ""}
-    </div>
-    ${items.length ? groups.map(([p, list]) => `
-      <div class="int-group">
-        <div class="int-group-label"><span class="int-g-ico" style="color:var(${INTEGRATION_META[p].accent})">${INTEGRATION_META[p].icon}</span>${INTEGRATION_META[p].label} <span class="meta">${list.length}</span></div>
-        <div class="int-grid">${list.map(intCard).join("")}</div>
-      </div>`).join("") : `
-      <div class="panel-card empty-cta">
-        <p>Todavía no hay herramientas conectadas.</p>
-        ${isAdmin
-          ? `<button class="btn-primary" id="int-empty-new">Conectar la primera</button>`
-          : `<p class="meta">Pedile a un administrador que conecte Google Drive, GitHub u otra herramienta.</p>`}
-      </div>`}
-  </div>`;
-
-  const openNew = () => integrationModal();
-  const n1 = $("#int-new"); if (n1) n1.onclick = openNew;
-  const n2 = $("#int-empty-new"); if (n2) n2.onclick = openNew;
-
-  $$(".int-card").forEach(card => {
-    const item = items.find(i => String(i.id) === card.dataset.id);
-    if (!item) return;
-    const edit = $(".int-edit", card); if (edit) edit.onclick = () => integrationModal(item);
-    const gh = $(".int-gh", card); if (gh) gh.onclick = () => toggleGithubPanel(card, item);
-    const pv = $(".int-preview", card); if (pv) pv.onclick = () => toggleDrivePreview(card, item);
-  });
-
-  function intCard(item) {
-    const meta = INTEGRATION_META[item.provider] || INTEGRATION_META.other;
-    let sub = hostOf(item.url);
-    if (item.provider === "github" && item.config && item.config.owner) {
-      sub = `${item.config.owner}/${item.config.repo}${item.has_token ? " · token ✓" : ""}`;
-    } else if (item.provider === "google_drive" && item.drive) {
-      sub = DRIVE_KIND_LABEL[item.drive.kind] || sub;
-    }
-    return `<div class="int-card" data-id="${item.id}">
-      <div class="int-card-head">
-        <span class="int-ico" style="color:var(${meta.accent})">${meta.icon}</span>
-        <div class="grow">
-          <div class="int-name">${esc(item.name)}</div>
-          <div class="meta">${esc(sub)}</div>
-        </div>
-        ${isAdmin ? `<button class="int-edit" title="Editar conexión" aria-label="Editar">${GEAR_SVG}</button>` : ""}
-      </div>
-      <div class="int-card-actions">
-        ${item.url ? `<a class="btn-ghost btn-small" href="${esc(item.url)}" target="_blank" rel="noopener">Abrir ↗</a>` : ""}
-        ${item.provider === "github" ? `<button class="btn-ghost btn-small int-gh">Ver issues</button>` : ""}
-        ${item.provider === "google_drive" && item.drive && item.drive.embeddable ? `<button class="btn-ghost btn-small int-preview">Vista previa</button>` : ""}
-      </div>
-      <div class="int-panel hidden"></div>
-    </div>`;
-  }
-}
-
-async function toggleGithubPanel(card, item) {
-  const panel = $(".int-panel", card), btn = $(".int-gh", card);
-  if (!panel.classList.contains("hidden")) {
-    panel.classList.add("hidden"); panel.innerHTML = ""; btn.textContent = "Ver issues"; return;
-  }
-  panel.classList.remove("hidden");
-  panel.innerHTML = `<div class="meta int-panel-loading">Cargando issues de GitHub…</div>`;
-  btn.textContent = "Ocultar";
-  try {
-    const data = await api(`/integrations/${item.id}/github/issues`);
-    renderGithubPanel(panel, item, data);
-  } catch (err) {
-    panel.innerHTML = `<div class="int-error">No se pudieron cargar los issues: ${esc(err.message)}</div>`;
-  }
-}
-
-function renderGithubPanel(panel, item, data) {
-  const issueRow = i => `
-    <div class="gh-issue">
-      <a class="gh-num" href="${esc(i.url)}" target="_blank" rel="noopener">#${i.number}</a>
-      <div class="grow">
-        <a class="gh-title" href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a>
-        <div class="gh-meta">${i.author ? `<span class="meta">por ${esc(i.author)}</span>` : ""}
-          ${i.labels.map(l => `<span class="gh-label">${esc(l.name)}</span>`).join("")}</div>
-      </div>
-      <button class="btn-ghost btn-small gh-import" data-n="${i.number}">Importar como tarea</button>
-    </div>`;
-  const prRow = p => `
-    <div class="gh-issue">
-      <a class="gh-num gh-pr" href="${esc(p.url)}" target="_blank" rel="noopener">#${p.number}</a>
-      <a class="gh-title grow" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>
-      ${p.author ? `<span class="meta">${esc(p.author)}</span>` : ""}
-    </div>`;
-
-  panel.innerHTML = `
-    <div class="gh-create">
-      <input class="field-input gh-new-title" placeholder="Título de un nuevo issue…">
-      <button class="btn-primary btn-small gh-create-btn">Crear issue</button>
-    </div>
-    ${item.has_token ? "" : `<div class="meta gh-hint">Para crear issues privados o con permisos, agregá un token (PAT) desde “Editar”.</div>`}
-    <div class="gh-section-label label">Issues abiertos · ${data.issues.length}</div>
-    ${data.issues.length ? data.issues.map(issueRow).join("") : `<div class="empty">Sin issues abiertos.</div>`}
-    ${data.pulls.length ? `<div class="gh-section-label label">Pull requests · ${data.pulls.length}</div>${data.pulls.map(prRow).join("")}` : ""}`;
-
-  $$(".gh-import", panel).forEach(b => b.onclick = async () => {
-    b.disabled = true;
-    try {
-      await api(`/integrations/${item.id}/github/import/${b.dataset.n}`, { method: "POST" });
-      toast("Issue importado como tarea — miralo en el Tablero", "ok");
-      b.textContent = "Importado ✓";
-    } catch (err) { toast(err.message, "error"); b.disabled = false; }
-  });
-
-  $(".gh-create-btn", panel).onclick = async () => {
-    const input = $(".gh-new-title", panel);
-    const title = input.value.trim();
-    if (!title) { toast("Escribí un título para el issue", "error"); return; }
-    try {
-      const issue = await api(`/integrations/${item.id}/github/issues`, { method: "POST", body: { title } });
-      toast(`Issue #${issue.number} creado en GitHub`, "ok");
-      renderGithubPanel(panel, item, await api(`/integrations/${item.id}/github/issues`));
-    } catch (err) { toast(err.message, "error"); }
-  };
-}
-
-function toggleDrivePreview(card, item) {
-  const panel = $(".int-panel", card), btn = $(".int-preview", card);
-  if (!panel.classList.contains("hidden")) {
-    panel.classList.add("hidden"); panel.innerHTML = ""; btn.textContent = "Vista previa"; return;
-  }
-  panel.classList.remove("hidden");
-  btn.textContent = "Ocultar";
-  panel.innerHTML = `<iframe class="drive-frame" src="${esc(item.drive.embed_url)}" loading="lazy"
-    allow="autoplay" referrerpolicy="no-referrer"></iframe>`;
-}
-
-/* Alta/edición de una conexión (solo admins llegan acá). */
-function integrationModal(item = null) {
-  const isEdit = !!item;
-  let provider = item ? item.provider : "github";
-
-  function fields(p) {
-    if (p === "github") {
-      const repo = item && item.config && item.config.owner
-        ? `${item.config.owner}/${item.config.repo}` : "";
-      return `
-        <div class="field"><label class="field-label">Repositorio</label>
-          <input id="i-repo" class="field-input" value="${esc(repo)}"
-            placeholder="owner/repo o https://github.com/owner/repo"></div>
-        <div class="field"><label class="field-label">Token de acceso (PAT) — opcional, para repos privados y crear issues</label>
-          <input id="i-token" class="field-input" type="password" autocomplete="off"
-            placeholder="${item && item.has_token ? "•••••••• guardado — dejá vacío para conservarlo" : "github_pat_…"}"></div>
-        ${isEdit && item.has_token ? `<label class="int-check"><input type="checkbox" id="i-token-clear"> Quitar el token guardado</label>` : ""}
-        <div class="field"><label class="field-label">Nombre (opcional)</label>
-          <input id="i-name" class="field-input" value="${esc(item ? item.name : "")}"
-            placeholder="Se usa owner/repo si lo dejás vacío"></div>`;
-    }
-    if (p === "google_drive") {
-      return `
-        <div class="field"><label class="field-label">Enlace de Google Drive / Docs / Sheets / Slides</label>
-          <input id="i-url" class="field-input" value="${esc(item ? item.url : "")}"
-            placeholder="https://drive.google.com/…"></div>
-        <div class="field"><label class="field-label">Nombre (opcional)</label>
-          <input id="i-name" class="field-input" value="${esc(item ? item.name : "")}" placeholder="Google Drive"></div>`;
-    }
-    return `
-      <div class="field"><label class="field-label">Nombre</label>
-        <input id="i-name" class="field-input" value="${esc(item ? item.name : "")}" placeholder="Figma, Notion, Trello…"></div>
-      <div class="field"><label class="field-label">Enlace</label>
-        <input id="i-url" class="field-input" value="${esc(item ? item.url : "")}" placeholder="https://…"></div>`;
-  }
-
-  const providerControl = isEdit
-    ? `<div class="field"><label class="field-label">Herramienta</label>
-         <div class="int-provider-fixed">${INTEGRATION_META[provider].label}</div></div>`
-    : `<div class="field"><label class="field-label">Herramienta</label>
-         <select id="i-provider" class="field-select">
-           ${PROVIDER_ORDER.map(p => `<option value="${p}" ${p === provider ? "selected" : ""}>${INTEGRATION_META[p].label}</option>`).join("")}
-         </select></div>`;
-
-  $("#modal-root").innerHTML = `
-  <div class="modal-overlay" id="modal-overlay">
-    <div class="modal">
-      <h3>${isEdit ? "Editar conexión" : "Conectar herramienta"}</h3>
-      ${providerControl}
-      <div id="i-fields">${fields(provider)}</div>
-      <div class="modal-actions">
-        ${isEdit ? `<button class="btn-ghost btn-small btn-danger" id="i-delete">Eliminar</button>` : ""}
-        <div class="spacer"></div>
-        <button class="btn-ghost" id="i-cancel">Cancelar</button>
-        <button class="btn-primary" id="i-save">${isEdit ? "Guardar" : "Conectar"}</button>
-      </div>
-    </div>
-  </div>`;
-
-  const close = () => ($("#modal-root").innerHTML = "");
-  $("#modal-overlay").onclick = e => { if (e.target.id === "modal-overlay") close(); };
-  $("#i-cancel").onclick = close;
-
-  const provSel = $("#i-provider");
-  if (provSel) provSel.onchange = e => { provider = e.target.value; $("#i-fields").innerHTML = fields(provider); };
-
-  $("#i-save").onclick = async () => {
-    const body = {};
-    const nameEl = $("#i-name");
-    const name = nameEl ? nameEl.value.trim() : "";
-    if (name) body.name = name;
-    if (provider === "github") {
-      const repo = $("#i-repo").value.trim();
-      if (repo) body.url = repo;                 // el backend acepta owner/repo o URL
-      const clear = $("#i-token-clear");
-      const token = $("#i-token").value.trim();
-      if (clear && clear.checked) body.token = "";
-      else if (token) body.token = token;
-    } else {
-      body.url = $("#i-url").value.trim();
-    }
-    if (!isEdit) body.provider = provider;
-    try {
-      if (isEdit) await api(`/integrations/${item.id}`, { method: "PATCH", body });
-      else await api("/integrations", { method: "POST", body });
-      close();
-      toast(isEdit ? "Conexión guardada" : "Herramienta conectada", "ok");
-      showView("integrations");
-    } catch (err) { toast(err.message, "error"); }
-  };
-
-  if (isEdit) $("#i-delete").onclick = () => confirmModal({
-    title: "Eliminar conexión",
-    body: `Se quitará «${item.name}» para todo el equipo. No borra nada en la herramienta externa.`,
-    confirm: "Eliminar",
-    onConfirm: async () => {
-      try { await api(`/integrations/${item.id}`, { method: "DELETE" }); toast("Conexión eliminada", "ok"); showView("integrations"); }
-      catch (err) { toast(err.message, "error"); }
-    },
-  });
-}
-
 /* ---------- equipo (solo admin) ---------- */
 
 async function renderTeam() {
