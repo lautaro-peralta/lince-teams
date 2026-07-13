@@ -266,7 +266,11 @@ async function connectWs() {
       api("/users").then(u => (state.users = u));
       if (state.view === "team" || state.view === "dashboard") showView(state.view);
     }
-    if (msg.scope === "tasks" && (state.view === "board" || state.view === "dashboard")) showView(state.view);
+    if (msg.scope === "tasks" && (state.view === "board" || state.view === "dashboard")) {
+      // No re-renderizar el tablero a mitad de un arrastre: se aplica al soltar.
+      if (state.view === "board" && boardDrag.active) boardDrag.pending = true;
+      else showView(state.view);
+    }
     if (msg.scope === "transcripts" && state.view === "transcripts") showView(state.view);
     if (msg.scope === "integrations" && state.view === "integrations") showView("integrations");
     if (msg.scope === "board" && state.wb) wbApply(msg.data);
@@ -422,13 +426,138 @@ function barsChart(days) {
 
 /* ---------- tablero kanban ---------- */
 
+/* Arrastre de tarjetas con Pointer Events: funciona igual con mouse y con el
+   dedo (el drag & drop nativo de HTML5 no dispara en pantallas táctiles).
+   En táctil la tarjeta se "levanta" manteniéndola pulsada ~200 ms; mover el
+   dedo antes cede el gesto al scroll (touch-action: pan-y en .task-card).
+   Mientras hay un arrastre activo, los re-renders del tablero que llegan por
+   WebSocket se posponen hasta soltar (el innerHTML mataría el gesto). */
+const boardDrag = { active: false, pending: false };
+
+function startCardDrag(e, card, task) {
+  if (e.button !== 0) return;
+  const touch = e.pointerType !== "mouse";
+  const startX = e.clientX, startY = e.clientY;
+  let x = startX, y = startY;
+  let lifted = false, ghost = null, overCol = null, offX = 0, offY = 0;
+  let liftTimer = 0, rafId = 0;
+
+  const lift = () => {
+    lifted = true;
+    boardDrag.active = true;
+    const r = card.getBoundingClientRect();
+    offX = x - r.left; offY = y - r.top;
+    ghost = card.cloneNode(true);
+    ghost.classList.add("task-ghost");
+    ghost.style.width = r.width + "px";
+    document.body.appendChild(ghost);
+    card.classList.add("dragging");
+    card.dataset.dragged = "1";
+    document.body.style.cursor = "grabbing";
+    placeGhost(); highlight();
+    rafId = requestAnimationFrame(tick);
+  };
+
+  const placeGhost = () => {
+    ghost.style.left = (x - offX) + "px";
+    ghost.style.top = (y - offY) + "px";
+  };
+
+  const highlight = () => {
+    const el = document.elementFromPoint(x, y); // el ghost no estorba (pointer-events: none)
+    const col = el ? el.closest(".col") : null;
+    if (col !== overCol) {
+      if (overCol) overCol.classList.remove("drag-over");
+      overCol = col;
+      if (overCol) overCol.classList.add("drag-over");
+    }
+  };
+
+  // Auto-scroll de la página cerca de los bordes (en el teléfono las columnas
+  // se apilan en vertical y la columna de destino puede quedar fuera de vista).
+  const tick = () => {
+    if (!lifted) return;
+    const m = 80, vh = window.innerHeight;
+    let dy = 0;
+    if (y < m) dy = -Math.ceil((m - y) / 6);
+    else if (y > vh - m) dy = Math.ceil((y - (vh - m)) / 6);
+    if (dy) { window.scrollBy(0, dy); highlight(); }
+    rafId = requestAnimationFrame(tick);
+  };
+
+  const onMove = ev => {
+    x = ev.clientX; y = ev.clientY;
+    if (!lifted) {
+      const dist = Math.abs(x - startX) + Math.abs(y - startY);
+      // Antes de levantar: en táctil mover cancela (gana el scroll nativo);
+      // con mouse superar el umbral inicia el arrastre y el clic queda intacto.
+      if (touch) { if (dist > 8) cleanup(); }
+      else if (dist > 5) lift();
+      return;
+    }
+    placeGhost(); highlight();
+  };
+
+  // Con la tarjeta levantada ningún touchmove debe scrollear la página. Como
+  // el dedo estuvo quieto durante la pulsación larga, el navegador aún no
+  // inició el scroll y el primer touchmove sigue siendo cancelable.
+  const onTouchMove = ev => { if (lifted) ev.preventDefault(); };
+
+  const cleanup = () => {
+    clearTimeout(liftTimer);
+    cancelAnimationFrame(rafId);
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.removeEventListener("pointercancel", onCancel);
+    document.removeEventListener("touchmove", onTouchMove);
+    document.body.style.cursor = "";
+    if (ghost) { ghost.remove(); ghost = null; }
+    if (overCol) overCol.classList.remove("drag-over");
+    card.classList.remove("dragging");
+    // El clic que sigue al pointerup no debe abrir el modal tras un arrastre.
+    if (card.dataset.dragged) setTimeout(() => { delete card.dataset.dragged; }, 400);
+  };
+
+  const flushPending = () => {
+    boardDrag.active = false;
+    if (boardDrag.pending) {
+      boardDrag.pending = false;
+      if (state.view === "board") renderBoard();
+    }
+  };
+
+  const onCancel = () => { lifted = false; cleanup(); flushPending(); };
+
+  const onUp = async () => {
+    const target = lifted && overCol ? overCol.dataset.status : null;
+    lifted = false;
+    cleanup();
+    if (target && target !== task.status) {
+      boardDrag.active = false;
+      boardDrag.pending = false;
+      try {
+        await api(`/tasks/${task.id}`, { method: "PATCH", body: { status: target } });
+        renderBoard();
+      } catch (err) { toast(err.message, "error"); }
+      return;
+    }
+    flushPending();
+  };
+
+  if (touch) liftTimer = setTimeout(lift, 200);
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onUp);
+  document.addEventListener("pointercancel", onCancel);
+  document.addEventListener("touchmove", onTouchMove, { passive: false });
+}
+
 async function renderBoard() {
   const seq = ++state.renderSeq;
   const tasks = await api("/tasks");
   if (seq !== state.renderSeq || state.view !== "board") return;
   $("#main").innerHTML = `<div class="view">
     <div class="view-head">
-      <div><h2>Tablero</h2><div class="view-sub">Arrastra las tarjetas entre columnas; haz clic para editar o asignar</div></div>
+      <div><h2>Tablero</h2><div class="view-sub">Arrastra las tarjetas entre columnas (en el móvil, mantén pulsada la tarjeta); haz clic para editar o asignar</div></div>
       <button class="btn-primary" id="board-new-task">+ Nueva tarea</button>
     </div>
     <div class="board">
@@ -439,28 +568,10 @@ async function renderBoard() {
   $("#board-new-task").onclick = () => taskModal();
 
   $$(".task-card").forEach(card => {
-    card.onclick = () => taskModal(tasks.find(t => t.id == card.dataset.id));
-    card.ondragstart = e => {
-      e.dataTransfer.setData("text/plain", card.dataset.id);
-      card.classList.add("dragging");
-    };
-    card.ondragend = () => card.classList.remove("dragging");
-  });
-
-  $$(".col").forEach(col => {
-    col.ondragover = e => { e.preventDefault(); col.classList.add("drag-over"); };
-    col.ondragleave = () => col.classList.remove("drag-over");
-    col.ondrop = async e => {
-      e.preventDefault();
-      col.classList.remove("drag-over");
-      const id = e.dataTransfer.getData("text/plain");
-      const task = tasks.find(t => t.id == id);
-      if (!task || task.status === col.dataset.status) return;
-      try {
-        await api(`/tasks/${id}`, { method: "PATCH", body: { status: col.dataset.status } });
-        renderBoard();
-      } catch (err) { toast(err.message, "error"); }
-    };
+    const task = tasks.find(t => t.id == card.dataset.id);
+    card.onclick = () => { if (!card.dataset.dragged) taskModal(task); };
+    card.oncontextmenu = ev => ev.preventDefault(); // menú de long-press en Android
+    card.onpointerdown = ev => startCardDrag(ev, card, task);
   });
 
   function column(status, items) {
@@ -477,7 +588,7 @@ async function renderBoard() {
   function taskCard(t) {
     const late = t.due_date && t.status !== "done" && t.due_date < new Date().toISOString().slice(0, 10);
     return `
-    <div class="task-card" draggable="true" data-id="${t.id}">
+    <div class="task-card" data-id="${t.id}">
       <div class="title">${esc(t.title)}</div>
       ${t.description ? `<div class="desc">${esc(t.description)}</div>` : ""}
       <div class="task-foot">
@@ -817,6 +928,7 @@ async function renderWhiteboard() {
       node.innerHTML = `<div class="wb-note-text"></div><span class="wb-author label"></span>`;
       node.addEventListener("pointerdown", e => itemPointerDown(e, item.id, node));
       node.ondblclick = () => editNote(item.id, node);
+      node.addEventListener("pointerup", e => tapToEdit(e, node, () => editNote(item.id, node)));
       canvas.appendChild(node);
     }
     node.style.background = item.color || NOTE_COLORS[0];
@@ -868,6 +980,7 @@ async function renderWhiteboard() {
       node.dataset.id = item.id;
       node.addEventListener("pointerdown", e => itemPointerDown(e, item.id, node));
       node.ondblclick = () => editText(item.id, node);
+      node.addEventListener("pointerup", e => tapToEdit(e, node, () => editText(item.id, node)));
       canvas.appendChild(node);
     }
     node.style.left = item.x + "px";
@@ -919,6 +1032,7 @@ async function renderWhiteboard() {
     const origin = { x: parseFloat(node.style.left) || 0, y: parseFloat(node.style.top) || 0 };
     let moved = false;
     const onMove = ev => {
+      if (pinch.active) return; // el gesto de dos dedos manda
       const p = canvasPoint(ev);
       if (Math.abs(p.x - start.x) + Math.abs(p.y - start.y) > 3) moved = true;
       node.style.left = Math.max(0, origin.x + p.x - start.x) + "px";
@@ -937,6 +1051,15 @@ async function renderWhiteboard() {
     };
     node.addEventListener("pointermove", onMove);
     node.addEventListener("pointerup", onUp);
+  }
+
+  /* Doble-tap táctil para editar notas/textos: el dblclick de los WebView es
+     poco confiable con el dedo; con mouse sigue mandando el ondblclick. */
+  function tapToEdit(e, node, edit) {
+    if (e.pointerType === "mouse" || pinch.active) return;
+    const now = Date.now();
+    if (now - (node._lastTap || 0) < 350) { node._lastTap = 0; edit(); }
+    else node._lastTap = now;
   }
 
   /* -- crear notas / texto -- */
@@ -1050,7 +1173,10 @@ async function renderWhiteboard() {
   function startErasing(e) {
     canvas.setPointerCapture?.(e.pointerId);
     const done = new Set();
-    const step = ev => { moveEraserCursor(ev); eraseAt(ev.clientX, ev.clientY, done); };
+    const step = ev => {
+      if (pinch.active) return; // el gesto de dos dedos manda
+      moveEraserCursor(ev); eraseAt(ev.clientX, ev.clientY, done);
+    };
     step(e);
     const onUp = ev => {
       canvas.removeEventListener("pointermove", step);
@@ -1067,6 +1193,7 @@ async function renderWhiteboard() {
     const sx = e.clientX, sy = e.clientY, sl = wrap.scrollLeft, st = wrap.scrollTop;
     canvas.classList.add("panning");
     const onMove = ev => {
+      if (pinch.active) return; // el gesto de dos dedos manda
       wrap.scrollLeft = sl - (ev.clientX - sx);
       wrap.scrollTop = st - (ev.clientY - sy);
     };
@@ -1081,7 +1208,42 @@ async function renderWhiteboard() {
 
   /* -- eventos del lienzo -- */
 
+  /* Pellizco con dos dedos: zoom + desplazamiento en un solo gesto. Se apoya
+     en touch-action: none (el navegador no scrollea ni zoomea la página).
+     El punto lógico bajo el centro de los dedos queda anclado y sigue al
+     punto medio: la misma cuenta que setZoom(), con ancla fija por gesto. */
+  const pinch = { pts: new Map(), active: false, startDist: 1, startZoom: 1, anchor: null };
+  const pinchMid = () => {
+    const [a, b] = [...pinch.pts.values()];
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  };
+  const pinchDist = () => {
+    const [a, b] = [...pinch.pts.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y) || 1;
+  };
+  const endPinchPointer = e => {
+    if (!pinch.pts.delete(e.pointerId)) return;
+    if (pinch.active && pinch.pts.size < 2) {
+      pinch.active = false;
+      pinch.pts.clear(); // el dedo restante no dibuja hasta un nuevo pointerdown
+    }
+  };
+
   canvas.addEventListener("pointerdown", e => {
+    if (e.pointerType === "touch") {
+      pinch.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch.pts.size === 2) {
+        // Baja el segundo dedo: se descarta el trazo en curso y empieza el gesto.
+        if (wb.drawing) { wb.drawing.node.remove(); wb.drawing = null; }
+        pinch.active = true;
+        pinch.startDist = pinchDist();
+        pinch.startZoom = wb.zoom;
+        const m = pinchMid(), r = canvas.getBoundingClientRect();
+        pinch.anchor = { x: (m.x - r.left) / wb.zoom, y: (m.y - r.top) / wb.zoom };
+        return;
+      }
+      if (pinch.active) return; // tercer dedo y siguientes: se ignoran
+    }
     if (wb.mode === "erase") { startErasing(e); return; }
     if (e.target !== canvas && e.target !== svg) return;   // crear sólo sobre zona vacía
     const p = canvasPoint(e);
@@ -1093,6 +1255,20 @@ async function renderWhiteboard() {
   });
 
   canvas.addEventListener("pointermove", e => {
+    if (pinch.pts.has(e.pointerId)) {
+      pinch.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch.active && pinch.pts.size >= 2) {
+        const z = clamp(pinch.startZoom * (pinchDist() / pinch.startDist), 0.25, 3);
+        wb.zoom = z;
+        canvas.style.transform = `scale(${z})`;
+        const m = pinchMid(), wr = wrap.getBoundingClientRect();
+        wrap.scrollLeft = pinch.anchor.x * z - (m.x - wr.left);
+        wrap.scrollTop = pinch.anchor.y * z - (m.y - wr.top);
+        $("#wb-zoom-label").textContent = Math.round(z * 100) + "%";
+        return;
+      }
+    }
+    if (pinch.active) return;
     if (wb.mode === "erase") moveEraserCursor(e);
     const d = wb.drawing; if (!d) return;
     const p = canvasPoint(e);
@@ -1108,11 +1284,19 @@ async function renderWhiteboard() {
   });
 
   canvas.addEventListener("pointerup", e => {
+    endPinchPointer(e);
     const d = wb.drawing; if (!d) return;
     wb.drawing = null;
     try { canvas.releasePointerCapture(e.pointerId); } catch {}
     if (d.kind === "stroke") finishStroke(d);
     else if (d.kind === "shape") finishShape(d);
+  });
+
+  canvas.addEventListener("pointercancel", e => {
+    endPinchPointer(e);
+    const d = wb.drawing; if (!d) return;
+    wb.drawing = null;
+    d.node.remove(); // gesto interrumpido por el sistema: se descarta el trazo
   });
 
   /* -- subida de imágenes -- */

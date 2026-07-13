@@ -88,6 +88,16 @@ equipo aprobado puede usar el servicio.
   [`deploy/DEPLOY-oracle.md`](deploy/DEPLOY-oracle.md) — la VM no se duerme y la
   A1 (ARM) tiene RAM de sobra para el modelo; ideal para el modo unificado.
 
+## App móvil
+
+La interfaz está optimizada para táctil: el kanban se arrastra con el dedo
+(mantené pulsada la tarjeta), la pizarra soporta dibujo a un dedo y zoom/pan
+de pellizco, y todo respeta las safe-areas del teléfono. La app móvil oficial
+(iOS/Android, shell de Capacitor que carga el origen unificado) vive en el
+repo [`lince-automatizations`](https://github.com/lautaro-peralta/lince-automatizations)
+bajo `mobile/`; cuando corre dentro de la app, Teams carga `/app-shell.js`
+(barra inferior para saltar entre Panel, Startup OS y Teams).
+
 ## Privacidad
 
 - El audio se procesa en tu máquina (Dictado) o en tu servidor (Teams) y se
