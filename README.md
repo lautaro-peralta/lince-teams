@@ -42,9 +42,10 @@ run_server.bat    # http://localhost:8000
 - **Transcripciones** — graba desde el navegador; el audio se transcribe con
   el modelo local del servidor y queda compartido con el equipo.
 - **Adjuntos en tareas** — cada tarjeta del tablero puede **enlazar recursos**:
-  pegá un doc de **Google Drive** (con vista previa dentro de la tarea), un
-  issue/PR de **GitHub** (con su título traído en vivo) o cualquier URL. El
-  tablero muestra un contador de adjuntos por tarjeta.
+  desde un **desplegable** elegís una integración conectada (un repo de
+  **GitHub** —y opcionalmente un issue/PR suyo—, un doc de **Google Drive** con
+  vista previa, u otra herramienta), sin escribir la URL; o pegás cualquier
+  enlace suelto. El tablero muestra un contador de adjuntos por tarjeta.
 
   > Las **conexiones** de integraciones (Google Drive, GitHub, tokens…) se
   > **configuran en Startup OS** (`/startup-os/#/integraciones`), no en Teams.

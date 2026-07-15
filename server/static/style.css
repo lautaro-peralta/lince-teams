@@ -559,6 +559,13 @@ body.wb-active .loading { height: 100%; min-height: 0; }
 .attach-btn svg { width: 15px; height: 15px; }
 .attach-btn:hover { background: var(--card); color: var(--ink); }
 .attach-remove:hover { color: var(--rust); }
+.attach-pick { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.attach-pick .field-select { flex: 1; min-width: 140px; }
+.attach-pick #m-int-add { flex: none; }
+.attach-url { margin-top: 8px; }
+.attach-url summary { font-size: 13px; color: var(--sage); cursor: pointer; user-select: none; }
+.attach-url summary:hover { color: var(--ink); }
+.attach-url[open] summary { margin-bottom: 8px; }
 .attach-add { display: flex; gap: 8px; }
 .attach-add .field-input { flex: 1; }
 .attach-preview:not(:empty) { margin-top: 10px; }

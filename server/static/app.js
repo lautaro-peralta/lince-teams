@@ -640,10 +640,18 @@ function taskModal(task = null) {
       <div class="field">
         <label class="field-label">Adjuntos — docs de Drive, issues de GitHub, enlaces</label>
         <div id="m-links" class="attach-list"></div>
-        <div class="attach-add">
-          <input id="m-link-url" class="field-input" placeholder="Pegá un enlace (Drive, GitHub, cualquier URL)">
-          <button class="btn-ghost btn-small" id="m-link-add" type="button">Adjuntar</button>
+        <div class="attach-pick" id="m-attach-pick">
+          <select id="m-int-pick" class="field-select"></select>
+          <select id="m-int-issue" class="field-select hidden"></select>
+          <button class="btn-ghost btn-small" id="m-int-add" type="button">Adjuntar</button>
         </div>
+        <details class="attach-url">
+          <summary>o pegá un enlace suelto</summary>
+          <div class="attach-add">
+            <input id="m-link-url" class="field-input" placeholder="https://drive.google.com/…, github.com/…, cualquier URL">
+            <button class="btn-ghost btn-small" id="m-link-add" type="button">Adjuntar enlace</button>
+          </div>
+        </details>
         <div id="m-link-preview" class="attach-preview"></div>
       </div>` : `
       <div class="field attach-hint"><span class="meta">Podés adjuntar docs y enlaces una vez creada la tarea.</span></div>`}
@@ -710,6 +718,11 @@ function linkChip(link) {
   </div>`;
 }
 
+function intOptionLabel(i) {
+  const label = (INTEGRATION_META[i.provider] || INTEGRATION_META.other).label;
+  return `${label} · ${i.name}`;
+}
+
 function mountTaskLinks(task) {
   const listEl = $("#m-links");
   const previewEl = $("#m-link-preview");
@@ -739,6 +752,46 @@ function mountTaskLinks(task) {
     });
   }
   render();
+
+  // Adjuntar eligiendo una integración conectada (repo de GitHub, doc de Drive,
+  // otra herramienta) desde un desplegable — sin tener que pegar la URL.
+  const pick = $("#m-int-pick"), issueSel = $("#m-int-issue"), intAddBtn = $("#m-int-add");
+  const pickHost = $("#m-attach-pick");
+  const noConn = msg => { if (pickHost) pickHost.innerHTML = `<span class="meta">${msg}</span>`; };
+  api("/integrations").then(list => {
+    if (!list.length) { noConn("Sin integraciones conectadas — configúralas en Startup OS, o pegá un enlace abajo."); return; }
+    pick.innerHTML = `<option value="">➕ Adjuntar de una integración…</option>` +
+      list.map(i => `<option value="${i.id}">${esc(intOptionLabel(i))}</option>`).join("");
+    pick.onchange = async () => {
+      const it = list.find(x => String(x.id) === pick.value);
+      issueSel.classList.add("hidden"); issueSel.innerHTML = "";
+      if (it && it.provider === "github") {
+        issueSel.classList.remove("hidden");
+        issueSel.innerHTML = `<option value="">Cargando issues…</option>`;
+        try {
+          const data = await api(`/integrations/${it.id}/github/issues`);
+          issueSel.innerHTML = [`<option value="">Todo el repositorio</option>`]
+            .concat(data.issues.map(x => `<option value="${x.number}">#${x.number} · ${esc(x.title)}</option>`))
+            .concat(data.pulls.map(x => `<option value="${x.number}">PR #${x.number} · ${esc(x.title)}</option>`))
+            .join("");
+        } catch { issueSel.innerHTML = `<option value="">Todo el repositorio (issues no disponibles)</option>`; }
+      }
+    };
+    intAddBtn.onclick = async () => {
+      const it = list.find(x => String(x.id) === pick.value);
+      if (!it) { toast("Elegí una integración del desplegable", "error"); return; }
+      const body = { integration_id: it.id };
+      if (it.provider === "github" && issueSel.value) body.ref = issueSel.value;
+      intAddBtn.disabled = true;
+      try {
+        const link = await api(`/tasks/${task.id}/links`, { method: "POST", body });
+        links.push(link); render();
+        pick.value = ""; issueSel.classList.add("hidden"); issueSel.innerHTML = "";
+        toast("Adjuntado", "ok");
+      } catch (err) { toast(err.message, "error"); }
+      finally { intAddBtn.disabled = false; }
+    };
+  }).catch(() => noConn("No se pudieron cargar las integraciones. Pegá un enlace abajo."));
 
   const doAdd = async () => {
     const url = input.value.trim();

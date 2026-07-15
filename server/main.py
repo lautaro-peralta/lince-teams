@@ -515,6 +515,17 @@ def add_task_link(task_id: int, body: LinkIn, user: dict = Depends(current_user)
         provider, url = "github", issue["url"]
         title = title or f"#{issue['number']} · {issue['title']}"
         ref = str(issue["number"])
+    elif integration_id and not url:
+        # Adjuntar el recurso de la conexión elegida (repo, doc o herramienta)
+        # directamente, sin tener que pegar la URL a mano.
+        conn = _load_integration(integration_id)
+        provider = conn["provider"]
+        url = (conn.get("url") or "").strip()
+        title = title or conn["name"]
+        if not url:
+            raise HTTPException(400, "La conexión no tiene un enlace para adjuntar.")
+        if provider == "google_drive":
+            ref = integrations.parse_drive(url).get("id") or None
     elif url:
         provider = integrations.classify(url)
         if provider == "github":
