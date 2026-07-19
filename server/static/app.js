@@ -258,8 +258,11 @@ async function connectWs() {
   const httpBase = API_BASE
     ? new URL(API_BASE, location.origin).href.replace(/\/+$/, "")
     : location.origin;
-  const ws = new WebSocket(httpBase.replace(/^http/, "ws") + `/ws?token=${tok}`);
+  const ws = new WebSocket(httpBase.replace(/^http/, "ws") + "/ws");
   state.ws = ws;
+  // El token se manda como primer mensaje, NUNCA en la URL: la query string
+  // queda escrita en los access logs de nginx/Cloudflare y el JWT se filtraría.
+  ws.onopen = () => ws.send(tok);
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
     if (msg.type !== "changed") return;

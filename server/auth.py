@@ -71,13 +71,34 @@ def destroy_session(token: str) -> None:
 # -- resolución de tokens --------------------------------------------------------
 
 def user_for_api_token(token: str) -> dict | None:
-    """Cuenta dueña de un token de API `lince_...` (n8n, scripts)."""
+    """Cuenta dueña de un token de API `lince_...` (n8n, scripts).
+
+    En modo unificado, además se re-chequea el rol ACTUAL en `profiles`: el
+    acceso se gestiona desde el panel (Supabase) y el espejo local queda
+    `active` para siempre, así que sin este chequeo un socio dado de baja
+    (rol → viewer) seguiría entrando con su token de API indefinidamente —y en
+    este modo no hay administración local de miembros que permita revocarlo.
+    """
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    return db.query_one(
-        f"""SELECT {_USER_FIELDS} FROM api_tokens t
+    row = db.query_one(
+        f"""SELECT {_USER_FIELDS}, u.auth_id FROM api_tokens t
             JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?""",
         (token_hash,),
     )
+    if not row:
+        return None
+    if SUPABASE_MODE:
+        # Cuentas sin auth_id (creadas en modo standalone) no tienen perfil que
+        # las respalde: en modo unificado quedan denegadas, igual que por JWT.
+        prof = _profile_for(row["auth_id"]) if row.get("auth_id") else None
+        role = _local_role((prof or {}).get("role"))
+        if role is None:
+            return None
+        if role != row["role"]:
+            db.execute("UPDATE users SET role = ? WHERE id = ?", (role, row["id"]))
+            row["role"] = role
+    row.pop("auth_id", None)
+    return row
 
 
 def user_for_session(token: str) -> dict | None:

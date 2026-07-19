@@ -1024,11 +1024,22 @@ def config_js():
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket, token: str = ""):
-    user = auth.user_for_token(token)
+    # El token llega como PRIMER MENSAJE tras conectar, no en la query string:
+    # una URL con ?token= deja el JWT escrito en los access logs de nginx, del
+    # túnel de Cloudflare y de cualquier proxy intermedio. `?token=` se sigue
+    # aceptando solo como compatibilidad transitoria con clientes viejos.
+    await ws.accept()
+    if not token:
+        try:
+            token = await asyncio.wait_for(ws.receive_text(), timeout=10)
+        except (asyncio.TimeoutError, WebSocketDisconnect):
+            await ws.close(code=4401)
+            return
+    # En hilo aparte: validar contra Supabase hace red y bloquearía el loop.
+    user = await asyncio.to_thread(auth.user_for_token, token)
     if not user or user["status"] != "active":
         await ws.close(code=4401)
         return
-    await ws.accept()
     await hub.register(ws)
     try:
         while True:

@@ -9,6 +9,8 @@ psycopg's `%s` style when running against Postgres.
 
 import os
 import sqlite3
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -25,6 +27,11 @@ IS_SUPABASE = bool(
 if IS_PG:
     import psycopg
     from psycopg.rows import dict_row
+
+    try:
+        from psycopg_pool import ConnectionPool
+    except ImportError:  # pool no instalado: se degrada a una conexión por consulta
+        ConnectionPool = None
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "lince.db"
 UPLOADS_DIR = DB_PATH.parent / "uploads"
@@ -138,14 +145,52 @@ def _sql(sql: str) -> str:
     return sql.replace("?", "%s") if IS_PG else sql
 
 
+# Pool de conexiones para Postgres (perezoso: se crea en el primer uso). Sin
+# pool, cada query pagaba un handshake TCP+TLS completo contra Supabase —cientos
+# de ms— y endpoints como /api/tasks hacen varias queries por request.
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _get_pool():
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ConnectionPool(
+                DATABASE_URL,
+                min_size=1,
+                max_size=int(os.environ.get("LINCE_DB_POOL_MAX", "5")),
+                kwargs={"row_factory": dict_row},
+            )
+        return _pool
+
+
+@contextmanager
 def connect():
+    """Conexión lista para `with connect() as conn:`. Commit al salir del bloque.
+
+    · Postgres: sale del pool (y vuelve a él al terminar). Si `psycopg_pool` no
+      está instalado, se degrada al comportamiento anterior (conexión nueva).
+    · SQLite: abrir el archivo es barato; se abre y CIERRA por consulta (antes
+      quedaba a merced del recolector de basura).
+    """
     if IS_PG:
-        return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        if ConnectionPool is not None:
+            with _get_pool().connection() as conn:
+                yield conn
+        else:
+            with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
+                yield conn
+        return
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        with conn:  # transacción: commit/rollback automático
+            yield conn
+    finally:
+        conn.close()
 
 
 def _migrate(conn) -> None:
