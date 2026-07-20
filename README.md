@@ -112,3 +112,6 @@ bajo `mobile/`; cuando corre dentro de la app, Teams carga `/app-shell.js`
   (`HF_HUB_OFFLINE=1` la bloquea después).
 - El servicio de transcripción requiere cuenta aprobada por un admin: sin
   aprobación no hay sesión ni token válido.
+
+Los aspectos legales del uso (roles de responsable/encargado, consentimiento
+para grabar reuniones, licencias) están en [LEGAL.md](LEGAL.md).
