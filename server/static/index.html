@@ -67,6 +67,9 @@ if (navigator.userAgent.indexOf("LinceApp") !== -1) {
       <a class="app-link" href="/startup-os/" title="Startup OS — ERP interno">Startup OS <span aria-hidden="true">↗</span></a>
     </div>
     <div class="mast-user">
+      <!-- Miembros conectados ahora; lo llena renderPresence() con lo que llega
+           por el WebSocket (scope "presence"). -->
+      <span id="presence" class="presence-stack" aria-label="Miembros en línea"></span>
       <span id="me-avatar" class="avatar"></span>
       <span id="me-name" class="user-name"></span>
       <button id="btn-logout" class="btn-ghost btn-small">Salir</button>

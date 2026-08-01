@@ -15,6 +15,10 @@ services:
       LINCE_DEVICE: ${LINCE_DEVICE:-auto}
       LINCE_COMPUTE_TYPE: ${LINCE_COMPUTE_TYPE:-int8}
       LINCE_CORS_ORIGINS: ${LINCE_CORS_ORIGINS:-}
+      # Avisos por correo al asignar tareas (ver SETUP-AVISOS.md). Vacío = apagado.
+      LINCE_N8N_TASK_WEBHOOK: ${LINCE_N8N_TASK_WEBHOOK:-}
+      LINCE_N8N_WEBHOOK_SECRET: ${LINCE_N8N_WEBHOOK_SECRET:-}
+      LINCE_APP_URL: ${LINCE_APP_URL:-}
     volumes:
       - ./data:/app/data              # base de datos SQLite y archivos de la pizarra
       - hf-cache:/root/.cache/huggingface  # modelo Whisper (se descarga una vez)

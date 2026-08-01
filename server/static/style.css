@@ -18,6 +18,10 @@
   --chart-doing: #C9622E;
   --chart-todo:  #3B7EC0;
 
+  /* Presencia (miembros conectados ahora). Mismo verde que "hecho": es el
+     único uso de color como señal de estado fuera de los gráficos. */
+  --online:      #2F7D4F;
+
   --display: 'Fraunces', Georgia, serif;
   --sans: 'Source Sans 3', 'Segoe UI', system-ui, sans-serif;
   --mono: 'JetBrains Mono', Consolas, monospace;
@@ -82,6 +86,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
   outline: none; border-color: var(--rust);
   box-shadow: 0 0 0 3px rgba(201,98,46,0.18);
 }
+/* Variante compacta, para campos editables dentro de una tabla. */
+.input-small { padding: 6px 10px; font-size: 13.5px; min-width: 190px; }
 ::placeholder { color: var(--sage); }
 .field-error { font-size: 13px; color: var(--error); min-height: 18px; }
 .auth-notice { font-size: 13px; color: var(--moss); min-height: 0; margin-bottom: 10px; }
@@ -182,6 +188,24 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
   font-family: var(--mono); font-size: 11px; font-weight: 500;
   flex-shrink: 0;
 }
+
+/* -- presencia: quién está conectado ahora -- */
+.presence-stack { display: inline-flex; align-items: center; }
+.presence-stack:empty { display: none; }
+/* Se superponen para ocupar poco en la cabecera. */
+.presence-stack .avatar { margin-right: -8px; border: 2px solid var(--bg); }
+.presence-stack .avatar:last-child { margin-right: 4px; }
+.avatar-small { width: 26px; height: 26px; font-size: 9.5px; }
+.presence-more { background: var(--sage); }
+/* El anillo verde distingue al conectado sin depender solo del color: el avatar
+   crece respecto de los que no están en la pila. */
+.avatar.is-online { box-shadow: 0 0 0 2px var(--online); }
+
+.presence-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--line-strong); margin-right: 7px; vertical-align: middle;
+}
+.presence-dot.is-online { background: var(--online); }
 
 .main { flex: 1; padding: 28px 24px calc(64px + var(--sab) + var(--lince-nav)); max-width: 1060px; width: 100%; margin-inline: auto; }
 .view-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
