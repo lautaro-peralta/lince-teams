@@ -32,7 +32,7 @@ from pydantic import BaseModel
 from lince import config as lince_config
 from lince.cleanup import clean
 
-from . import auth, db, integrations
+from . import auth, db, integrations, notify
 
 app = FastAPI(title="Lince Teams")
 db.init()
@@ -80,33 +80,58 @@ def get_transcriber():
 # -- live updates --------------------------------------------------------------
 
 class Hub:
+    """Sockets conectados + quién está detrás de cada uno.
+
+    Guardar la identidad (y no solo el socket) es lo que permite mostrar los
+    miembros activos en tiempo real: un usuario con dos pestañas son dos entradas
+    y se deduplica al listar.
+    """
+
     def __init__(self):
-        self.clients: set[WebSocket] = set()
+        self.clients: dict[WebSocket, dict] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
 
-    async def register(self, ws: WebSocket) -> None:
+    async def register(self, ws: WebSocket, user: dict) -> None:
         self.loop = asyncio.get_running_loop()
-        self.clients.add(ws)
+        self.clients[ws] = {"id": user["id"], "display_name": user["display_name"]}
+
+    def unregister(self, ws: WebSocket) -> None:
+        self.clients.pop(ws, None)
+
+    def online(self) -> list[dict]:
+        """Miembros conectados, sin repetir por pestaña, ordenados por nombre."""
+        unique = {u["id"]: u for u in self.clients.values()}
+        return sorted(unique.values(), key=lambda u: u["display_name"].lower())
+
+    def _message(self, scope: str, by: str, data: dict | None) -> str:
+        return json.dumps(
+            {"type": "changed", "scope": scope, "by": by, "data": data},
+            default=str,
+        )
+
+    async def _send(self, message: str) -> None:
+        dead = []
+        for ws in list(self.clients):
+            try:
+                await ws.send_text(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.clients.pop(ws, None)
 
     def broadcast(self, scope: str, by: str, data: dict | None = None) -> None:
         """Thread-safe: callable from worker threads running sync endpoints."""
         if not self.clients or self.loop is None:
             return
-        message = json.dumps(
-            {"type": "changed", "scope": scope, "by": by, "data": data},
-            default=str,
-        )
+        asyncio.run_coroutine_threadsafe(self._send(self._message(scope, by, data)), self.loop)
 
-        async def _send():
-            dead = set()
-            for ws in self.clients:
-                try:
-                    await ws.send_text(message)
-                except Exception:
-                    dead.add(ws)
-            self.clients -= dead
+    async def broadcast_presence(self, by: str) -> None:
+        """Avisa a todos quién está en línea. Se llama desde el endpoint del
+        WebSocket, que ya corre en el event loop: no hace falta reprogramar.
 
-        asyncio.run_coroutine_threadsafe(_send(), self.loop)
+        Al conectar alcanza con esto: el socket nuevo ya está registrado, así que
+        recibe la lista completa y no hace falta un envío aparte."""
+        await self._send(self._message("presence", by, {"online": self.online()}))
 
 
 hub = Hub()
@@ -242,7 +267,7 @@ def users(user: dict = Depends(current_user)):
 def admin_members(admin: dict = Depends(current_admin)):
     auth.sync_members()  # modo unificado: trae a los socios/admins aunque no hayan entrado
     return db.query_all(
-        """SELECT id, username, display_name, role, status, created_at
+        """SELECT id, username, display_name, email, role, status, created_at
            FROM users ORDER BY status DESC, created_at"""
     )
 
@@ -250,21 +275,29 @@ def admin_members(admin: dict = Depends(current_admin)):
 class MemberPatch(BaseModel):
     role: str | None = None
     status: str | None = None
+    email: str | None = None
 
 
 @app.patch("/api/admin/members/{member_id}")
 def admin_update_member(member_id: int, body: MemberPatch,
                         admin: dict = Depends(current_admin)):
-    if auth.SUPABASE_MODE:
+    changes = body.model_dump(exclude_unset=True)
+    # En modo unificado los roles y accesos los gestiona el panel de Lince, pero
+    # el email es dato local de Teams (lo usan los avisos), así que sí se edita.
+    if auth.SUPABASE_MODE and set(changes) - {"email"}:
         raise HTTPException(403, "Gestioná miembros y roles desde el panel de Lince (Supabase).")
     member = db.query_one("SELECT * FROM users WHERE id = ?", (member_id,))
     if not member:
         raise HTTPException(404, "Miembro no encontrado.")
-    changes = body.model_dump(exclude_unset=True)
     if "role" in changes and changes["role"] not in ROLES:
         raise HTTPException(400, "Rol inválido.")
     if "status" in changes and changes["status"] not in USER_STATUSES:
         raise HTTPException(400, "Estado inválido.")
+    if "email" in changes:
+        email = (changes["email"] or "").strip()
+        if email and not notify.is_email(email):
+            raise HTTPException(400, "Ese email no parece válido.")
+        changes["email"] = email or None  # vacío = borrar
     if member_id == admin["id"] and (
         changes.get("role") == "member" or changes.get("status") == "pending"
     ):
@@ -281,9 +314,16 @@ def admin_update_member(member_id: int, body: MemberPatch,
             log_activity(admin, f"{admin['display_name']} revocó el acceso de {member['display_name']}")
         hub.broadcast("users", admin["display_name"])
     return db.query_one(
-        "SELECT id, username, display_name, role, status, created_at FROM users WHERE id = ?",
+        "SELECT id, username, display_name, email, role, status, created_at FROM users WHERE id = ?",
         (member_id,),
     )
+
+
+@app.post("/api/admin/notify/test")
+def admin_notify_test(admin: dict = Depends(current_admin)):
+    """Manda un aviso de prueba al webhook de n8n, a tu propio email. Sincrónico
+    a propósito: sirve para verificar la configuración y ver el error si falla."""
+    return notify.send_test(admin)
 
 
 @app.delete("/api/admin/members/{member_id}")
@@ -419,6 +459,7 @@ def create_task(body: TaskIn, user: dict = Depends(current_user)):
     else:
         log_activity(user, f"{user['display_name']} creó la tarea «{task['title']}»")
     hub.broadcast("tasks", user["display_name"])
+    notify.task_assigned(task, user, "task.created")
     return task
 
 
@@ -439,13 +480,21 @@ def update_task(task_id: int, body: TaskPatch, user: dict = Depends(current_user
             (*changes.values(), task_id),
         )
         new = db.query_one(TASK_SELECT + " WHERE t.id = ?", (task_id,))
+        # El frontend manda el body completo en cada edición, así que "assignee_id
+        # viene en el patch" no alcanza: hay que comparar con el valor anterior o
+        # cambiar el título de una tarea asignada contaría como reasignarla.
+        reassigned = ("assignee_id" in changes
+                      and changes["assignee_id"] != task["assignee_id"]
+                      and changes["assignee_id"] != user["id"])
         if changes.get("status") == "done" and task["status"] != "done":
             log_activity(user, f"{user['display_name']} completó «{task['title']}»")
-        elif "assignee_id" in changes and new["assignee_name"] and changes["assignee_id"] != user["id"]:
+        elif reassigned and new["assignee_name"]:
             log_activity(user, f"{user['display_name']} asignó «{task['title']}» a {new['assignee_name']}")
         else:
             log_activity(user, f"{user['display_name']} actualizó «{task['title']}»")
         hub.broadcast("tasks", user["display_name"])
+        if reassigned:
+            notify.task_assigned(new, user, "task.assigned")
         return new
     return db.query_one(TASK_SELECT + " WHERE t.id = ?", (task_id,))
 
@@ -953,11 +1002,11 @@ def dashboard(user: dict = Depends(current_user)):
     for row in db.query_all("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status"):
         counts[row["status"]] = row["n"]
     per_user = db.query_all(
-        """SELECT u.display_name AS name, COUNT(t.id) AS open
+        """SELECT u.id, u.display_name AS name, COUNT(t.id) AS open
            FROM users u LEFT JOIN tasks t
              ON t.assignee_id = u.id AND t.status != 'done'
            WHERE u.status = 'active'
-           GROUP BY u.id ORDER BY open DESC, name"""
+           GROUP BY u.id, u.display_name ORDER BY open DESC, name"""
     )
     mine = db.query_all(
         TASK_SELECT + " WHERE t.assignee_id = ? AND t.status != 'done'"
@@ -1029,12 +1078,16 @@ async def ws_endpoint(ws: WebSocket, token: str = ""):
         await ws.close(code=4401)
         return
     await ws.accept()
-    await hub.register(ws)
+    await hub.register(ws, user)
+    await hub.broadcast_presence(user["display_name"])
     try:
         while True:
             await ws.receive_text()  # keepalive pings from the client
     except WebSocketDisconnect:
-        hub.clients.discard(ws)
+        pass
+    finally:
+        hub.unregister(ws)
+        await hub.broadcast_presence(user["display_name"])
 
 
 # -- static (mounted last so /api and /ws win) ---------------------------------------

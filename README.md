@@ -52,9 +52,19 @@ run_server.bat    # http://localhost:8000
   > GitHub al adjuntarlo, por ejemplo— leyéndolas del mismo Supabase compartido.
   > La API sigue viviendo en este servicio (`/api/integrations`), consumida por
   > Startup OS vía el login unificado.
+- **Avisos por correo** — al **crear una tarea ya asignada** o **reasignar** una
+  existente, el asignado recibe un mail. Teams no manda los correos: hace un POST
+  a un **webhook de n8n** y el workflow los envía, así no hay credenciales SMTP
+  en el servidor. Sin configurar queda apagado. Paso a paso y workflow listo para
+  importar: [SETUP-AVISOS.md](SETUP-AVISOS.md).
+- **Miembros en línea** — la cabecera muestra quién está conectado **en tiempo
+  real** (y un punto verde en Panel y Equipo). Sale del mismo WebSocket que ya
+  sincroniza tareas y pizarra: se actualiza al entrar y salir cualquiera, sin
+  recargar.
 - **Equipo** (admins) — control de acceso: cada registro nuevo queda
   **pendiente hasta que un administrador lo apruebe**; roles admin/miembro,
-  revocación de acceso y eliminación de cuentas.
+  revocación de acceso y eliminación de cuentas. También es donde se carga el
+  **email de cada miembro** al que llegan los avisos.
 
 El primer usuario registrado se convierte en administrador automáticamente.
 
@@ -63,7 +73,8 @@ El primer usuario registrado se convierte en administrador automáticamente.
 > tener cuentas propias: el navegador usa el JWT de Supabase y los miembros son
 > los `profiles` con rol `admin`/`socio`. Se activa con `SUPABASE_URL` +
 > `SUPABASE_ANON_KEY` en el entorno (el registro/aprobación propios se
-> desactivan y la pestaña Equipo se oculta). Transcripciones y tiempo real
+> desactivan y la pestaña Equipo queda de solo lectura, salvo el email de los
+> avisos, que sigue siendo dato local de Teams). Transcripciones y tiempo real
 > siguen igual. Guía en [DEPLOY.md](DEPLOY.md#modo-unificado-un-solo-login-con-lince-automate).
 
 ### API de transcripción (n8n, scripts)

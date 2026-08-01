@@ -24,3 +24,11 @@ services:
         sync: false
       - key: LINCE_LOGIN_URL     # a dónde mandar a iniciar sesión (por defecto /admin)
         value: /admin
+      # ── Avisos por correo al asignar tareas (ver SETUP-AVISOS.md) ───────────
+      # Sin LINCE_N8N_TASK_WEBHOOK la función queda apagada.
+      - key: LINCE_N8N_TASK_WEBHOOK   # webhook de n8n que manda el correo
+        sync: false
+      - key: LINCE_N8N_WEBHOOK_SECRET # se manda como header X-Lince-Token
+        sync: false
+      - key: LINCE_APP_URL            # base pública, para el enlace del correo
+        sync: false

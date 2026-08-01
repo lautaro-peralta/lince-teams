@@ -162,21 +162,29 @@ def _upsert_local(auth_id: str, full_name: str | None, supa_role: str | None,
         return None
     auth_id = str(auth_id)  # puede venir como uuid.UUID (desde profiles); users.auth_id es texto
     name = (full_name or email or "Socio").strip() or "Socio"
-    existing = db.query_one("SELECT id, display_name, role, status FROM users WHERE auth_id = ?", (auth_id,))
+    email = (email or "").strip() or None
+    existing = db.query_one(
+        "SELECT id, display_name, role, status, email FROM users WHERE auth_id = ?", (auth_id,)
+    )
     if existing:
         if existing["display_name"] != name or existing["role"] != role or existing["status"] != "active":
             db.execute(
                 "UPDATE users SET display_name = ?, role = ?, status = 'active' WHERE auth_id = ?",
                 (name, role, auth_id),
             )
+        # El email de Supabase manda, pero nunca pisamos con vacío: `sync_members`
+        # puede no traerlo (si el rol de la DB no lee auth.users) y no queremos
+        # borrar lo que ya cargó un admin a mano.
+        if email and existing["email"] != email:
+            db.execute("UPDATE users SET email = ? WHERE auth_id = ?", (email, auth_id))
         return existing["id"]
     # `username` es NOT NULL UNIQUE: usamos el email (o el uuid) como identificador
     # legible. salt/password_hash quedan de placeholder: nunca se usan en este modo.
     username = (email or auth_id)
     return db.execute(
-        """INSERT INTO users(username, display_name, salt, password_hash, role, status, auth_id)
-           VALUES(?,?,?,?,?,'active',?)""",
-        (username, name, "supabase", "supabase", role, auth_id),
+        """INSERT INTO users(username, display_name, email, salt, password_hash, role, status, auth_id)
+           VALUES(?,?,?,?,?,?,'active',?)""",
+        (username, name, email, "supabase", "supabase", role, auth_id),
         returning_id=True,
     )
 
@@ -199,15 +207,27 @@ def sync_members() -> None:
     aparezcan en la lista de asignables aunque aún no hayan entrado nunca."""
     if not SUPABASE_MODE:
         return
+    # El email vive en `auth.users`, no en `public.profiles`. Lo traemos para que
+    # los socios espejados reciban los avisos por correo aunque nunca hayan
+    # entrado a Teams. El rol de DATABASE_URL puede no tener permiso sobre el
+    # esquema `auth`: en ese caso caemos a la consulta de siempre, sin email.
     try:
         rows = db.query_all(
-            "SELECT id, full_name, role FROM profiles WHERE role = ? OR role = ?",
+            """SELECT p.id, p.full_name, p.role, u.email
+               FROM profiles p LEFT JOIN auth.users u ON u.id = p.id
+               WHERE p.role = ? OR p.role = ?""",
             ("admin", "socio"),
         )
     except Exception:
-        return  # sin tabla profiles (p. ej. DB no-Supabase): no hay nada que espejar
+        try:
+            rows = db.query_all(
+                "SELECT id, full_name, role FROM profiles WHERE role = ? OR role = ?",
+                ("admin", "socio"),
+            )
+        except Exception:
+            return  # sin tabla profiles (p. ej. DB no-Supabase): no hay nada que espejar
     for p in rows:
-        _upsert_local(p["id"], p.get("full_name"), p.get("role"))
+        _upsert_local(p["id"], p.get("full_name"), p.get("role"), p.get("email"))
 
 
 # -- tokens de API ---------------------------------------------------------------
