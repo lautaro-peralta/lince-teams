@@ -14,19 +14,23 @@ Todo lo que tenés que hacer vos está en los 5 pasos de abajo. Toma unos 10 min
 
 ---
 
-## Paso 1 — Crear el workflow en n8n
+## Paso 1 — El workflow en n8n
 
-1. Entrá a tu n8n → **Workflows** → botón **⋯** (arriba a la derecha) → **Import from
-   File**.
-2. Elegí el archivo [`n8n/lince-teams-tarea-asignada.json`](n8n/lince-teams-tarea-asignada.json)
-   de este repositorio.
-3. Te quedan 4 nodos: **Webhook → ¿Tiene email? → Enviar correo → Respuesta**.
+> **Ya está creado** en el n8n de Lince (proyecto **Lince**), con la credencial de Gmail
+> conectada: **Lince Teams — aviso de tarea asignada**. Queda **inactivo** hasta que lo
+> actives vos. Si necesitás recrearlo (otra instancia, otro entorno), importá
+> [`n8n/lince-teams-tarea-asignada.json`](n8n/lince-teams-tarea-asignada.json) desde
+> **Workflows → ⋯ → Import from File**.
 
-## Paso 2 — Conectar la credencial de correo
+Son 4 nodos: **Webhook → Normalizar aviso → ¿Tiene email? → Enviar correo**. El nodo de
+normalización tolera que el payload llegue en `body` (producción) o en la raíz (pruebas), y
+el IF descarta en silencio los avisos que llegan sin dirección.
 
-1. Abrí el nodo **Enviar correo** (Gmail).
-2. En **Credential to connect with**, elegí tu credencial de Gmail o creá una nueva
-   (*Sign in with Google*).
+## Paso 2 — Revisar el envío y activar
+
+1. Abrí el nodo **Enviar correo al asignado** (Gmail) y confirmá la credencial.
+2. Activá el workflow con el interruptor **Active** de arriba a la derecha. Hasta que no lo
+   actives, la URL de producción del webhook no responde.
 3. Si preferís SMTP en vez de Gmail: borrá ese nodo, agregá un **Send Email**, conectalo
    igual y completá los campos con las mismas expresiones:
 
@@ -37,11 +41,11 @@ Todo lo que tenés que hacer vos está en los 5 pasos de abajo. Toma unos 10 min
    | HTML | `{{ $json.body.body_html }}` |
    | Text (opcional) | `{{ $json.body.body_text }}` |
 
-4. **Guardá** el workflow y activalo con el interruptor **Active** de arriba a la derecha.
+   Guardá y activá igual que arriba.
 
 ## Paso 3 — Copiar la URL del webhook
 
-1. Abrí el nodo **Webhook**.
+1. Abrí el nodo **Aviso de Lince Teams**.
 2. Copiá la **Production URL** (la que termina en `/webhook/lince-teams/tarea-asignada`).
    Ojo: *no* la de Test, que solo vale mientras tenés el editor abierto escuchando.
 
@@ -64,10 +68,14 @@ Dónde ponerlas, según tu despliegue:
 | Render | *Environment* del servicio | redeploy automático |
 
 **Sobre `LINCE_N8N_WEBHOOK_SECRET` (opcional pero recomendado):** si la definís, Teams
-manda su valor en el header `X-Lince-Token`. Para que n8n lo verifique, en el nodo
-**Webhook** activá *Authentication → Header Auth* y creá una credencial con nombre
-`X-Lince-Token` y ese mismo valor. Sin esto, cualquiera que adivine la URL puede disparar
-correos.
+manda su valor en el header `X-Lince-Token`. El workflow **viene sin autenticación**, así
+que para que n8n lo verifique hay que activarla: en el nodo **Aviso de Lince Teams** poné
+*Authentication → Header Auth* y creá una credencial con Name `X-Lince-Token` y ese mismo
+valor. Sin esto, cualquiera que adivine la URL puede disparar correos. La nota adhesiva del
+workflow repite estos pasos.
+
+> Los dos lados tienen que coincidir: si activás Header Auth en n8n pero no definís
+> `LINCE_N8N_WEBHOOK_SECRET` en Teams, n8n rechaza los avisos y no llega ningún correo.
 
 ## Paso 5 — Cargar los emails del equipo
 
