@@ -52,9 +52,20 @@ run_server.bat    # http://localhost:8000
   > GitHub al adjuntarlo, por ejemplo— leyéndolas del mismo Supabase compartido.
   > La API sigue viviendo en este servicio (`/api/integrations`), consumida por
   > Startup OS vía el login unificado.
+- **Avisos por correo** — al **crear una tarea ya asignada** o **reasignar** una
+  existente, el asignado recibe un mail. Teams no manda los correos: hace un POST
+  a un **webhook de n8n** y el workflow los envía, así no hay credenciales SMTP
+  en el servidor. Sin configurar queda apagado. Paso a paso y workflow listo para
+  importar: [SETUP-AVISOS.md](SETUP-AVISOS.md).
+- **Miembros en línea** — la cabecera muestra quién está conectado **en tiempo
+  real** (y un punto verde en Panel y Equipo). Sale del mismo WebSocket que ya
+  sincroniza tareas y pizarra: se actualiza al entrar y salir cualquiera, sin
+  recargar.
 - **Equipo** (admins) — control de acceso: cada registro nuevo queda
   **pendiente hasta que un administrador lo apruebe**; roles admin/miembro,
-  revocación de acceso y eliminación de cuentas.
+  revocación de acceso y eliminación de cuentas. También es donde se carga el
+  **email de cada miembro** al que llegan los avisos (en modo unificado esa
+  pestaña no aplica: los emails vienen solos desde Supabase).
 
 El primer usuario registrado se convierte en administrador automáticamente.
 
@@ -112,3 +123,6 @@ bajo `mobile/`; cuando corre dentro de la app, Teams carga `/app-shell.js`
   (`HF_HUB_OFFLINE=1` la bloquea después).
 - El servicio de transcripción requiere cuenta aprobada por un admin: sin
   aprobación no hay sesión ni token válido.
+
+Los aspectos legales del uso (roles de responsable/encargado, consentimiento
+para grabar reuniones, licencias) están en [LEGAL.md](LEGAL.md).

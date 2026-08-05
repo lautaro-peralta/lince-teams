@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS users(
   id {_ID},
   username TEXT UNIQUE NOT NULL,
   display_name TEXT NOT NULL,
+  email TEXT,
   salt TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'member',
@@ -199,6 +200,7 @@ def _migrate(conn) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member'")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'")
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_id TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT")
         fresh_columns = False
     else:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -208,6 +210,16 @@ def _migrate(conn) -> None:
             conn.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
         if "auth_id" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN auth_id TEXT")
+        if "email" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+
+    # Cuentas viejas cuyo `username` ya era un email (el caso del modo unificado,
+    # ver auth._upsert_local): lo copiamos para que reciban los avisos sin que un
+    # admin tenga que recargarlo a mano.
+    conn.execute(
+        "UPDATE users SET email = username "
+        "WHERE email IS NULL AND username LIKE '%_@_%.__%'"
+    )
 
     # auth_id enlaza el usuario local con su cuenta de Supabase (modo unificado).
     # Índice único que tolera múltiples NULL (las cuentas legacy no lo tienen).

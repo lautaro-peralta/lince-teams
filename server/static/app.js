@@ -26,6 +26,7 @@ const state = {
   token: localStorage.getItem("lince_token"),
   me: null,
   users: [],
+  online: [],   // miembros conectados ahora (llega por el WebSocket, scope "presence")
   view: "dashboard",
   ws: null,
   renderSeq: 0, // guards against a stale async render overwriting a newer view
@@ -174,7 +175,9 @@ async function enterApp() {
   $("#me-name").textContent = state.me.display_name;
   $("#me-avatar").outerHTML = avatarHtml(state.me.display_name).replace('class="avatar"', 'class="avatar" id="me-avatar"');
   // En modo unificado los miembros y roles se gestionan en el panel de Lince,
-  // así que la pestaña Equipo (aprobación/roles locales) no aplica.
+  // así que la pestaña Equipo (aprobación/roles locales) no aplica. Los emails de
+  // los avisos llegan solos desde Supabase; ver SETUP-AVISOS.md para cargarlos a
+  // mano en los casos que no vengan.
   $("#nav-team").classList.toggle("hidden", state.me.role !== "admin" || !!state.supabase);
   // Enlaces a las otras herramientas del ecosistema (Panel /admin, Startup OS
   // /startup-os/): solo tienen sentido en el despliegue unificado (mismo origen
@@ -266,6 +269,14 @@ async function connectWs() {
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
     if (msg.type !== "changed") return;
+    // Quién está en línea: se refresca solo al entrar y salir cualquiera, así que
+    // no lleva toast (si no, cada conexión avisaría a todo el equipo).
+    if (msg.scope === "presence") {
+      state.online = (msg.data && msg.data.online) || [];
+      renderPresence();
+      if (state.view === "team" || state.view === "dashboard") showView(state.view);
+      return;
+    }
     if (msg.by !== state.me.display_name && msg.scope !== "board") {
       toast(`Actualizado por ${msg.by}`);
     }
@@ -281,12 +292,50 @@ async function connectWs() {
     if (msg.scope === "transcripts" && state.view === "transcripts") showView(state.view);
     if (msg.scope === "board" && state.wb) wbApply(msg.data);
   };
-  // Reintenta mientras siga habiendo sesión (token propio o de Supabase).
-  ws.onclose = () => setTimeout(() => { if (state.me) connectWs(); }, 3000);
+  // Reintenta mientras siga habiendo sesión (token propio o de Supabase). Al
+  // caerse la conexión ya no sabemos quién sigue conectado: vaciamos la lista en
+  // vez de dejar gente "en línea" de mentira. El server la reenvía al reconectar.
+  ws.onclose = () => {
+    state.online = [];
+    renderPresence();
+    setTimeout(() => { if (state.me) connectWs(); }, 3000);
+  };
   const ping = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) ws.send("ping");
     else clearInterval(ping);
   }, 25000);
+}
+
+/* ---------- miembros activos (tiempo real) ---------- */
+
+function isOnline(userId) {
+  return state.online.some(u => u.id === userId);
+}
+
+// Punto verde para las listas de miembros (Equipo, Panel).
+function presenceDot(userId) {
+  const on = isOnline(userId);
+  return `<span class="presence-dot ${on ? "is-online" : ""}" title="${on ? "En línea" : "Desconectado"}"></span>`;
+}
+
+// Pila de avatares en la cabecera. Los primeros 5, y "+N" si hay más.
+function renderPresence() {
+  const box = $("#presence");
+  if (!box) return;
+  const others = state.online.filter(u => !state.me || u.id !== state.me.id);
+  if (!others.length) {
+    box.innerHTML = "";
+    box.title = "Nadie más conectado";
+    return;
+  }
+  const shown = others.slice(0, 5);
+  const extra = others.length - shown.length;
+  box.innerHTML =
+    shown.map(u => avatarHtml(u.display_name, "avatar avatar-small is-online")).join("") +
+    (extra ? `<span class="avatar avatar-small presence-more">+${extra}</span>` : "");
+  box.title = others.length === 1
+    ? `${others[0].display_name} está en línea`
+    : `${others.length} en línea: ${others.map(u => u.display_name).join(", ")}`;
 }
 
 /* ---------- panel ---------- */
@@ -342,7 +391,7 @@ async function renderDashboard() {
           <h3>Carga del equipo</h3>
           ${d.per_user.length ? d.per_user.map(u => `
             <div class="load-row">
-              <span class="name">${esc(u.name)}</span>
+              <span class="name">${presenceDot(u.id)}${esc(u.name)}</span>
               <div class="track"><div class="fill" style="width:${(u.open / maxLoad) * 100}%"></div></div>
               <span class="n meta">${u.open}</span>
             </div>`).join("") : `<div class="empty">Sin miembros aún.</div>`}
@@ -1699,14 +1748,20 @@ async function renderTeam() {
 
   const pending = members.filter(m => m.status === "pending");
   const active = members.filter(m => m.status === "active");
+  // En modo unificado el alta, los roles y los accesos los gestiona el panel de
+  // Lince: acá solo se edita el email de los avisos.
+  const managed = !!state.supabase;
 
   $("#main").innerHTML = `<div class="view">
     <div class="view-head">
       <div><h2>Equipo</h2>
-      <div class="view-sub">Solo las cuentas que apruebes pueden usar Lince Teams y la API de transcripción</div></div>
+      <div class="view-sub">${managed
+        ? "Las altas y los roles se gestionan en el panel de Lince. Acá cargás el email al que llegan los avisos de tareas"
+        : "Solo las cuentas que apruebes pueden usar Lince Teams y la API de transcripción"}</div></div>
+      <button id="notify-test" class="btn-ghost btn-small">Probar avisos por correo</button>
     </div>
 
-    ${pending.length ? `
+    ${pending.length && !managed ? `
     <div class="panel-card" style="margin-bottom:16px">
       <h3>Solicitudes pendientes <span class="badge badge-rust">${pending.length}</span></h3>
       ${pending.map(m => `
@@ -1722,21 +1777,25 @@ async function renderTeam() {
       <h3>Miembros</h3>
       <div class="table-wrap">
         <table class="data-table">
-          <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Alta</th><th>Acciones</th></tr></thead>
+          <thead><tr><th>Nombre</th><th>Usuario</th><th>Email para avisos</th><th>Rol</th><th>Alta</th>${managed ? "" : "<th>Acciones</th>"}</tr></thead>
           <tbody>
             ${active.map(m => `
             <tr data-id="${m.id}">
-              <td>${esc(m.display_name)}${m.id === state.me.id ? ` <span class="meta">(tú)</span>` : ""}</td>
+              <td>${presenceDot(m.id)}${esc(m.display_name)}${m.id === state.me.id ? ` <span class="meta">(tú)</span>` : ""}</td>
               <td class="meta">@${esc(m.username)}</td>
+              <td>
+                <input type="email" class="field-input input-small mb-email" value="${esc(m.email || "")}"
+                       placeholder="sin email · no recibe avisos" autocomplete="off">
+              </td>
               <td><span class="badge ${m.role === "admin" ? "badge-rust" : "badge-moss"}">${m.role === "admin" ? "Admin" : "Miembro"}</span></td>
               <td class="meta">${timeAgo(m.created_at)}</td>
-              <td>${m.id === state.me.id ? "" : `
+              ${managed ? "" : `<td>${m.id === state.me.id ? "" : `
                 <div class="member-actions">
                   <button class="btn-ghost btn-small mb-role" data-role="${m.role === "admin" ? "member" : "admin"}">
                     ${m.role === "admin" ? "Quitar admin" : "Hacer admin"}</button>
                   <button class="btn-ghost btn-small mb-revoke">Revocar acceso</button>
                   <button class="btn-ghost btn-small btn-danger mb-delete">Eliminar</button>
-                </div>`}</td>
+                </div>`}</td>`}
             </tr>`).join("")}
           </tbody>
         </table>
@@ -1768,6 +1827,33 @@ async function renderTeam() {
     if (!confirm("¿Eliminar esta cuenta? Sus tareas quedarán sin asignar.")) return;
     act(id, () => api(`/admin/members/${id}`, { method: "DELETE" }));
   });
+  // Email de los avisos: se guarda al salir del campo, sin re-renderizar (si no,
+  // se pierde el foco mientras se escribe en la fila de al lado).
+  $$(".mb-email").forEach(input => {
+    const original = input.value;
+    input.onchange = async () => {
+      const id = input.closest("[data-id]").dataset.id;
+      try {
+        await api(`/admin/members/${id}`, { method: "PATCH", body: { email: input.value.trim() } });
+        toast("Email guardado");
+      } catch (err) {
+        input.value = original;
+        toast(err.message, "error");
+      }
+    };
+  });
+  $("#notify-test").onclick = async () => {
+    const btn = $("#notify-test");
+    btn.disabled = true;
+    try {
+      const r = await api("/admin/notify/test", { method: "POST" });
+      toast(r.ok ? `Aviso de prueba enviado a ${r.to}` : r.detail, r.ok ? "ok" : "error");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  };
 }
 
 /* ---------- boot ---------- */
