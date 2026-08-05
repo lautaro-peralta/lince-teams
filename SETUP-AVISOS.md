@@ -73,23 +73,39 @@ correos.
 
 Los avisos van al email de cada miembro, que ahora se guarda en Teams.
 
+**En modo unificado (Supabase) no tenés que hacer nada:** Teams toma el email de la cuenta
+de Supabase al iniciar sesión y al sincronizar los socios, así que se completan solos.
+Como ahí las altas y los roles se gestionan desde el panel de Lince, la pestaña Equipo no
+se muestra. Si algún perfil quedara sin email (nunca entró y su dirección no es legible
+desde la base), se carga por API:
+
+```bash
+curl -X PATCH https://TU-TEAMS/api/admin/members/<id> \
+  -H "Authorization: Bearer <tu-JWT>" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"persona@ejemplo.com"}'
+```
+
+**En modo standalone**, desde la app:
+
 1. Entrá como admin → pestaña **Equipo**.
 2. Cada miembro tiene una columna **Email para avisos**: escribí la dirección y salí del
    campo (se guarda solo).
 3. Los que quedan vacíos muestran *"sin email · no recibe avisos"* y simplemente no
    reciben nada.
 
-**En modo unificado (Supabase) la mayoría ya viene cargada sola**, porque Teams toma el
-email de la cuenta de Supabase al iniciar sesión y al sincronizar los socios. Solo vas a
-tener que completar a mano los casos raros (perfiles que nunca entraron y cuyo email no es
-legible desde la base).
-
 ---
 
 ## Probar que funciona
 
-1. **Prueba directa:** pestaña **Equipo** → botón **Probar avisos por correo**. Manda un
-   correo de prueba a tu propia dirección y te muestra el error exacto si algo falla.
+1. **Prueba directa:** manda un correo de prueba a tu propia dirección y te devuelve el
+   error exacto si algo falla. En standalone está el botón **Probar avisos por correo** en
+   la pestaña Equipo; en modo unificado, por API:
+
+   ```bash
+   curl -X POST https://TU-TEAMS/api/admin/notify/test -H "Authorization: Bearer <tu-JWT>"
+   ```
+
 2. **Prueba real:** creá una tarea y asignásela a otra persona. Le tiene que llegar el
    correo en unos segundos.
 
