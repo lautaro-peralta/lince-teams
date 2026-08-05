@@ -1,0 +1,8 @@
+# Dependencias SOLO para correr los tests (tests/smoke.py). No van a la VM.
+#
+# Deliberadamente NO incluye faster-whisper ni numpy: el modelo se carga de
+# forma perezosa (`get_transcriber`), así que la app importa y se testea sin él
+# —y el CI no tiene que bajar cientos de MB de torch.
+fastapi>=0.110
+python-multipart>=0.0.9
+httpx>=0.27          # lo necesita fastapi.testclient
