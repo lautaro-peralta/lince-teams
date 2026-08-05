@@ -1,15 +1,32 @@
+# Despliega Lince Teams a la VM de OCI, pero SOLO si el CI pasó.
+#
+# Se dispara cuando el workflow "CI" termina (no directamente con el push): así
+# un commit que rompe los smoke tests nunca llega a producción. Para desplegar a
+# mano (rollback, credenciales nuevas) está workflow_dispatch.
 name: Deploy Teams to OCI
 
 on:
-  push:
-    branches:
-      - master # Se dispara al mergear o pushear a master (rama default de este repo)
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+# Nunca dos deploys pisándose; y este no se cancela a mitad de camino.
+concurrency:
+  group: deploy-teams
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # En workflow_dispatch no hay workflow_run: la condición lo deja pasar.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Deploy to OCI via SSH
+        # TODO: pinnear a un SHA de commit (un tag es mutable: quien controle el
+        # repo de la acción podría cambiarlo y correr código arbitrario con
+        # nuestra llave SSH). Ver DEPLOY.md.
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -19,6 +36,9 @@ jobs:
           script: |
             set -e
             cd /opt/lince-teams
+            # Respaldo antes de tocar nada: si el deploy sale mal, la base y los
+            # adjuntos de hoy siguen estando (ver deploy/backup.sh).
+            [ -x deploy/backup.sh ] && ./deploy/backup.sh || true
             # Deja la VM EXACTAMENTE en origin/master (descarta cambios locales;
             # data/, .env y teams.env quedan intactos por estar ignorados/afuera).
             git fetch origin master
