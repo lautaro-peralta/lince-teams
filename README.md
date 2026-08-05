@@ -64,7 +64,8 @@ run_server.bat    # http://localhost:8000
 - **Equipo** (admins) — control de acceso: cada registro nuevo queda
   **pendiente hasta que un administrador lo apruebe**; roles admin/miembro,
   revocación de acceso y eliminación de cuentas. También es donde se carga el
-  **email de cada miembro** al que llegan los avisos.
+  **email de cada miembro** al que llegan los avisos (en modo unificado esa
+  pestaña no aplica: los emails vienen solos desde Supabase).
 
 El primer usuario registrado se convierte en administrador automáticamente.
 
@@ -73,8 +74,7 @@ El primer usuario registrado se convierte en administrador automáticamente.
 > tener cuentas propias: el navegador usa el JWT de Supabase y los miembros son
 > los `profiles` con rol `admin`/`socio`. Se activa con `SUPABASE_URL` +
 > `SUPABASE_ANON_KEY` en el entorno (el registro/aprobación propios se
-> desactivan y la pestaña Equipo queda de solo lectura, salvo el email de los
-> avisos, que sigue siendo dato local de Teams). Transcripciones y tiempo real
+> desactivan y la pestaña Equipo se oculta). Transcripciones y tiempo real
 > siguen igual. Guía en [DEPLOY.md](DEPLOY.md#modo-unificado-un-solo-login-con-lince-automate).
 
 ### API de transcripción (n8n, scripts)

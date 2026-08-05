@@ -175,9 +175,10 @@ async function enterApp() {
   $("#me-name").textContent = state.me.display_name;
   $("#me-avatar").outerHTML = avatarHtml(state.me.display_name).replace('class="avatar"', 'class="avatar" id="me-avatar"');
   // En modo unificado los miembros y roles se gestionan en el panel de Lince,
-  // pero la pestaña Equipo sigue haciendo falta: es donde se cargan los emails de
-  // los avisos. Ahí se muestra en modo solo lectura salvo esa columna.
-  $("#nav-team").classList.toggle("hidden", state.me.role !== "admin");
+  // así que la pestaña Equipo (aprobación/roles locales) no aplica. Los emails de
+  // los avisos llegan solos desde Supabase; ver SETUP-AVISOS.md para cargarlos a
+  // mano en los casos que no vengan.
+  $("#nav-team").classList.toggle("hidden", state.me.role !== "admin" || !!state.supabase);
   // Enlaces a las otras herramientas del ecosistema (Panel /admin, Startup OS
   // /startup-os/): solo tienen sentido en el despliegue unificado (mismo origen
   // tras el panel). En standalone no existen, así que se ocultan.
