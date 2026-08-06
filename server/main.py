@@ -1089,7 +1089,9 @@ async def ws_endpoint(ws: WebSocket, token: str = ""):
     if not user or user["status"] != "active":
         await ws.close(code=4401)
         return
-    await ws.accept()
+    # OJO: el accept() ya se hizo arriba (hace falta para poder RECIBIR el token
+    # como primer mensaje). Aceptar de nuevo acá lanza RuntimeError y tira abajo
+    # el tiempo real completo: pizarra, presencia y avisos.
     await hub.register(ws, user)
     await hub.broadcast_presence(user["display_name"])
     try:
