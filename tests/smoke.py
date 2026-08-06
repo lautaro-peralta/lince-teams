@@ -123,6 +123,19 @@ try:
 except WebSocketDisconnect as e:
     check("token inválido => cierre 4401", e.code == 4401)
 
+# Presencia: al conectar, el server manda la lista de quién está en línea. Este
+# caso además blinda el orden del handshake —un `accept()` de más rompe el
+# tiempo real entero con RuntimeError, y no se nota hasta abrir la pizarra—.
+try:
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text(TOKEN)
+        msg = ws.receive_json()
+        online = [u["display_name"] for u in msg.get("data", {}).get("online", [])]
+        check("al conectar se anuncia la presencia", msg.get("scope") == "presence")
+        check("el que conecta aparece en línea", "Smoke" in online)
+except Exception as e:  # noqa: BLE001
+    check(f"presencia al conectar ({type(e).__name__}: {e})", False)
+
 
 print("\nrutas")
 r = client.get("/api/health")

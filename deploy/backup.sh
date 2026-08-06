@@ -37,7 +37,19 @@ mkdir -p "$BACKUP_DIR"
 # ── Base de datos ────────────────────────────────────────────────────────────
 if [ -n "${DATABASE_URL:-}" ]; then
   # Postgres/Supabase: volcado lógico, restaurable con `psql < dump.sql`.
-  pg_dump "$DATABASE_URL" > "$WORK/db.sql"
+  #
+  # NO se invoca `pg_dump` a secas: en Debian/Ubuntu ese comando es `pg_wrapper`,
+  # que redirige a la versión por defecto del sistema. Si la VM tiene el cliente
+  # 16 y Supabase corre 17, el volcado aborta con "server version mismatch".
+  # Se usa el binario versionado más nuevo que haya instalado.
+  PG_DUMP="$(ls -d /usr/lib/postgresql/*/bin/pg_dump 2>/dev/null | sort -V | tail -1)"
+  PG_DUMP="${PG_DUMP:-$(command -v pg_dump || true)}"
+  if [ -z "$PG_DUMP" ]; then
+    echo "[backup] ERROR: no se encontró pg_dump. Instalalo con:" >&2
+    echo "  sudo apt-get install -y postgresql-client-17" >&2
+    exit 1
+  fi
+  "$PG_DUMP" "$DATABASE_URL" > "$WORK/db.sql"
 else
   # SQLite: la API `backup()` es segura con el servicio CORRIENDO (copiar el
   # archivo a mano puede dejarlo inconsistente si hay una escritura a mitad de
